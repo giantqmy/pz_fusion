@@ -49,6 +49,13 @@ class PZDepthStage(nn.Module):
         )
 
     def forward(self, x):
+        # A singleton ``from`` list can be produced by model YAML parsing.
+        # Depth stages consume one tensor; only fusion stages intentionally
+        # receive a list of tensors.
+        if isinstance(x, (list, tuple)):
+            if len(x) != 1:
+                raise ValueError(f"PZDepthStage expects one tensor, got {len(x)} inputs")
+            x = x[0]
         if self.from_raw:
             x = x[:, 4:5]
         return self.block(x)
