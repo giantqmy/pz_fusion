@@ -100,6 +100,39 @@ class YOLODataset(BaseDataset):
         self.data = data
         super().__init__(*args, channels=self.data.get("channels", 3), **kwargs)
 
+    def load_image_file(self, path: str, flags: int | None = None) -> np.ndarray | None:
+        """Load paired RGB/DoLP, optionally with uint16 depth, in fixed RGB-first channel order."""
+        if self.data.get("rgb_dolp_depth"):
+            from ultralytics.data.pz_modalities import load_rgb_dolp_depth
+
+            return load_rgb_dolp_depth(path)
+        if not self.data.get("rgb_dolp"):
+            return super().load_image_file(path, flags)
+
+        path = Path(path)
+        rgb_path = path.with_name(f"{path.stem}_S0_rgb.png")
+        dolp_path = path.with_name(f"{path.stem}_dolp_rgb.png")
+        rgb = super().load_image_file(str(rgb_path), cv2.IMREAD_COLOR)
+        dolp = super().load_image_file(str(dolp_path), cv2.IMREAD_GRAYSCALE)
+        if rgb is None or dolp is None:
+            missing = rgb_path if rgb is None else dolp_path
+            raise FileNotFoundError(f"Missing required RGB-DoLP input file: {missing}")
+        if rgb.shape[:2] != dolp.shape[:2]:
+            raise ValueError(f"RGB and DoLP sizes differ: {rgb_path} {rgb.shape[:2]} vs {dolp_path} {dolp.shape[:2]}")
+        return np.concatenate((cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB), dolp), axis=2)
+
+    def load_image(self, i: int, rect_mode: bool = True, resize_short: bool = False):
+        """Keep five-channel disk cache separate from ordinary image caches."""
+        if self.data.get("rgb_dolp_depth"):
+            self.npy_files[i] = Path(self.im_files[i]).with_suffix(".rgb_dolp_depth5.npy")
+        return super().load_image(i, rect_mode, resize_short)
+
+    def cache_images_to_disk(self, i: int) -> None:
+        """Write five-channel caches under a modality-specific suffix."""
+        if self.data.get("rgb_dolp_depth"):
+            self.npy_files[i] = Path(self.im_files[i]).with_suffix(".rgb_dolp_depth5.npy")
+        return super().cache_images_to_disk(i)
+
     def cache_labels(self, path: Path = Path("./labels.cache")) -> dict:
         """Cache dataset labels, check images and read shapes.
 

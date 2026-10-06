@@ -606,7 +606,10 @@ class Mosaic(BaseMixTransform):
         """
         layout = params["layout"]
         if self.n == 4:
-            img4 = np.full((self.imgsz * 2, self.imgsz * 2, labels["img"].shape[2]), 114, dtype=np.uint8)
+            channels = labels["img"].shape[2]
+            img4 = np.full((self.imgsz * 2, self.imgsz * 2, channels), 114, dtype=labels["img"].dtype)
+            if channels == 5:
+                img4[..., 4] = 0
             for item in layout:
                 labels_patch = item["labels_patch"]
                 img = labels_patch["img"]
@@ -615,7 +618,10 @@ class Mosaic(BaseMixTransform):
                 img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]
             labels["img"] = img4
         elif self.n == 9:
-            img9 = np.full((self.imgsz * 3, self.imgsz * 3, labels["img"].shape[2]), 114, dtype=np.uint8)
+            channels = labels["img"].shape[2]
+            img9 = np.full((self.imgsz * 3, self.imgsz * 3, channels), 114, dtype=labels["img"].dtype)
+            if channels == 5:
+                img9[..., 4] = 0
             for item in layout:
                 labels_patch = item["labels_patch"]
                 img = labels_patch["img"]
@@ -1190,7 +1196,13 @@ class RandomPerspective(BaseTransform):
         M = params["M"]
         size = params["size"]
         # 4 values: cv2 tiles borderValue in blocks of 4, so a 3-tuple zeroes every 4th multispectral channel
-        if self.perspective:
+        if img.ndim == 3 and img.shape[2] == 5:
+            warp = cv2.warpPerspective if self.perspective else cv2.warpAffine
+            matrix = M if self.perspective else M[:2]
+            visual = warp(img[..., :4], matrix, dsize=size, borderValue=(114,) * 4)
+            depth = warp(img[..., 4], matrix, dsize=size, flags=cv2.INTER_NEAREST, borderValue=0)
+            img = np.concatenate((visual, depth[..., None]), axis=2)
+        elif self.perspective:
             img = cv2.warpPerspective(img, M, dsize=size, borderValue=(114, 114, 114, 114))
         else:  # affine
             img = cv2.warpAffine(img, M[:2], dsize=size, borderValue=(114, 114, 114, 114))
@@ -1803,6 +1815,8 @@ class LetterBox(BaseTransform):
             )
         else:  # multispectral
             pad_img = np.full((h + top + bottom, w + left + right, c), fill_value=self.padding_value, dtype=img.dtype)
+            if c == 5:
+                pad_img[..., 4] = 0  # missing depth must not become a false measurement
             pad_img[top : top + h, left : left + w] = img
             img = pad_img
 

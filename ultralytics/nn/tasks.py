@@ -76,6 +76,9 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
+    PZPIMStage,
+    PZDepthStage,
+    PZDepthFusion,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -432,7 +435,7 @@ def _initialize_yolo_model(model, cfg, ch, nc, verbose):
         )
         model.yaml["backbone"][0][2] = "nn.Identity"
 
-    model.yaml["channels"] = ch  # save channels
+    ch = model.yaml["channels"] = model.yaml.get("channels", ch)  # input channels
     if nc and nc != model.yaml["nc"]:
         LOGGER.info(f"Overriding model.yaml nc={model.yaml['nc']} with nc={nc}")
         model.yaml["nc"] = nc  # override YAML value
@@ -480,6 +483,7 @@ class DetectionModel(BaseModel):
         """
         super().__init__()
         _initialize_yolo_model(self, cfg, ch, nc, verbose)
+        ch = self.yaml["channels"]  # use YAML input channels for stride initialization
 
         # Build strides
         m = self.model[-1]  # Detect()
@@ -2128,6 +2132,17 @@ def parse_model(d, ch, verbose=True):
                     args.extend((True, 1.2))
             if m is C2fCIB:
                 legacy = False
+        elif m is PZPIMStage:
+            c1, c2 = ch[f], args[0]
+            c2 = make_divisible(min(c2, max_channels) * width, 8)
+            args = [c1, c2, *args[1:]]
+        elif m is PZDepthStage:
+            c1 = ch[f[0]] if isinstance(f, list) else ch[f]
+            c2 = args[2] if len(args) > 2 else 32
+            args = [c1, *args]
+        elif m is PZDepthFusion:
+            c2 = ch[f[0]]
+            args = [c2, ch[f[1]], *args]
         elif m is AIFI:
             args = [ch[f], *args]
         elif m in frozenset({HGStem, HGBlock}):

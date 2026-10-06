@@ -255,13 +255,13 @@ class BaseDataset(Dataset):
                             f"{self.prefix}Removing stale *.npy image file {fn} with {npy_channels} channels, expected {self.channels}"
                         )
                         Path(fn).unlink(missing_ok=True)
-                        im = imread(f, flags=self.cv2_flag)
+                        im = self.load_image_file(f)
                 except Exception as e:
                     LOGGER.warning(f"{self.prefix}Removing corrupt *.npy image file {fn} due to: {e}")
                     Path(fn).unlink(missing_ok=True)
-                    im = imread(f, flags=self.cv2_flag)  # BGR
+                    im = self.load_image_file(f)
             else:  # read image
-                im = imread(f, flags=self.cv2_flag)  # BGR
+                im = self.load_image_file(f)
             if im is None:
                 raise FileNotFoundError(f"Image Not Found {f}")
 
@@ -295,6 +295,10 @@ class BaseDataset(Dataset):
 
         return self.ims[i], self.im_hw0[i], self.im_hw[i]
 
+    def load_image_file(self, path: str, flags: int | None = None) -> np.ndarray | None:
+        """Read one image file, allowing datasets to customize how input channels are assembled."""
+        return imread(path, flags=self.cv2_flag if flags is None else flags)
+
     def cache_images(self) -> None:
         """Cache images to memory or disk for faster training."""
         b, gb = 0, 1 << 30  # bytes of cached images, bytes per gigabytes
@@ -318,7 +322,7 @@ class BaseDataset(Dataset):
         f = self.npy_files[i]
         if not f.exists():
             try:
-                np.save(f.as_posix(), imread(self.im_files[i], flags=self.cv2_flag), allow_pickle=False)
+                np.save(f.as_posix(), self.load_image_file(self.im_files[i]), allow_pickle=False)
             except Exception as e:
                 f.unlink(missing_ok=True)
                 LOGGER.warning(f"{self.prefix}WARNING ⚠️ Failed to cache image {f}: {e}")
