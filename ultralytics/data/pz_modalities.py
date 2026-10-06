@@ -1,5 +1,7 @@
 """Paired PZ detection input: R, G, B, DoLP, raw uint16 depth."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import cv2

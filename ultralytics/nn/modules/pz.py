@@ -1,8 +1,8 @@
 """Small PIM/SAFF-style blocks for the five-channel PZ YOLO26 model."""
 
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 
 class _ConvNeXtBlock(nn.Module):
@@ -45,7 +45,9 @@ class PZDepthStage(nn.Module):
         self.from_raw = c_in == 5
         self.block = nn.Sequential(
             nn.Conv2d(1 if self.from_raw else c_in, width, 3, stride=int(stride), padding=1, bias=False),
-            nn.BatchNorm2d(width), nn.SiLU(), _ConvNeXtBlock(width),
+            nn.BatchNorm2d(width),
+            nn.SiLU(),
+            _ConvNeXtBlock(width),
         )
 
     def forward(self, x):
@@ -60,7 +62,9 @@ class PZDepthFusion(nn.Module):
     def __init__(self, channels, depth_channels=32):
         super().__init__()
         hidden = max(channels // 4, 8)
-        self.depth_proj = nn.Sequential(nn.Conv2d(depth_channels, channels, 1, bias=False), nn.BatchNorm2d(channels), nn.SiLU())
+        self.depth_proj = nn.Sequential(
+            nn.Conv2d(depth_channels, channels, 1, bias=False), nn.BatchNorm2d(channels), nn.SiLU()
+        )
         self.gate = nn.Sequential(nn.Conv2d(channels * 2, hidden, 1), nn.SiLU(), nn.Conv2d(hidden, 1, 1))
         nn.init.zeros_(self.gate[-1].weight)
         nn.init.constant_(self.gate[-1].bias, -4.0)
