@@ -119,7 +119,7 @@ class YOLODataset(BaseDataset):
             raise FileNotFoundError(f"Missing required RGB-DoLP input file: {missing}")
         if rgb.shape[:2] != dolp.shape[:2]:
             raise ValueError(f"RGB and DoLP sizes differ: {rgb_path} {rgb.shape[:2]} vs {dolp_path} {dolp.shape[:2]}")
-        return np.concatenate((cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB), dolp), axis=2)
+        return np.concatenate((cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB), dolp[..., None]), axis=2)
 
     def load_image(self, i: int, rect_mode: bool = True, resize_short: bool = False):
         """Keep five-channel disk cache separate from ordinary image caches."""

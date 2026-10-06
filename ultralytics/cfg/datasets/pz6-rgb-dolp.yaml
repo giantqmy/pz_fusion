@@ -1,0 +1,14 @@
+# Four-channel PZ input in fixed order: RGB, DoLP.
+path: /media/ddc/新加卷/hys/qmy/pz
+train: train.txt
+val: val.txt
+channels: 4
+ch: 4
+rgb_dolp: true
+names:
+  0: Pedestrian
+  1: Car
+  2: Cyclist
+  3: Truck
+  4: Bus
+  5: Tricycle
