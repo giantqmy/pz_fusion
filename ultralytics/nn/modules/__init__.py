@@ -95,6 +95,7 @@ from .head import (
     YOLOESegment26,
     v10Detect,
 )
+from .pz import PZDepthFusion, PZDepthStage, PZPIMStage
 from .transformer import (
     AIFI,
     MLP,
@@ -107,13 +108,9 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerLayer,
 )
-from .pz import PZPIMStage, PZDepthStage, PZDepthFusion
 
 __all__ = (
     "AIFI",
-    "PZPIMStage",
-    "PZDepthStage",
-    "PZDepthFusion",
     "C1",
     "C2",
     "C2PSA",
@@ -172,6 +169,9 @@ __all__ = (
     "MLPBlock",
     "MSDeformAttn",
     "MaxSigmoidAttnBlock",
+    "PZDepthFusion",
+    "PZDepthStage",
+    "PZPIMStage",
     "Pose",
     "Pose26",
     "Proto",
