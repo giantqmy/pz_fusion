@@ -117,6 +117,11 @@ class YOLODataset(BaseDataset):
         if rgb is None or dolp is None:
             missing = rgb_path if rgb is None else dolp_path
             raise FileNotFoundError(f"Missing required RGB-DoLP input file: {missing}")
+        # The project's imread wrapper adds a singleton channel to grayscale images.
+        if dolp.ndim == 3 and dolp.shape[-1] == 1:
+            dolp = dolp[..., 0]
+        if dolp.ndim != 2:
+            raise ValueError(f"Expected single-channel DoLP image, got shape {dolp.shape}: {dolp_path}")
         if rgb.shape[:2] != dolp.shape[:2]:
             raise ValueError(f"RGB and DoLP sizes differ: {rgb_path} {rgb.shape[:2]} vs {dolp_path} {dolp.shape[:2]}")
         return np.concatenate((cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB), dolp[..., None]), axis=2)
