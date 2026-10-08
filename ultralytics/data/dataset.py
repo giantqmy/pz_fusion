@@ -117,20 +117,26 @@ class YOLODataset(BaseDataset):
         if rgb is None or dolp is None:
             missing = rgb_path if rgb is None else dolp_path
             raise FileNotFoundError(f"Missing required RGB-DoLP input file: {missing}")
+        if dolp.ndim == 3 and dolp.shape[-1] == 1:
+            dolp = dolp[..., 0]
+        if dolp.ndim != 2:
+            raise ValueError(f"Expected single-channel DoLP image, got shape {dolp.shape}: {dolp_path}")
         if rgb.shape[:2] != dolp.shape[:2]:
             raise ValueError(f"RGB and DoLP sizes differ: {rgb_path} {rgb.shape[:2]} vs {dolp_path} {dolp.shape[:2]}")
-        return np.concatenate((cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB), dolp), axis=2)
+        return np.concatenate((cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB), dolp[..., None]), axis=2)
 
     def load_image(self, i: int, rect_mode: bool = True, resize_short: bool = False):
-        """Keep five-channel disk cache separate from ordinary image caches."""
-        if self.data.get("rgb_dolp_depth"):
-            self.npy_files[i] = Path(self.im_files[i]).with_suffix(".rgb_dolp_depth5.npy")
+        """Keep paired modalities' caches separate from plain image caches."""
+        if self.data.get("rgb_dolp_depth") or self.data.get("rgb_dolp"):
+            suffix = ".rgb_dolp_depth5.npy" if self.data.get("rgb_dolp_depth") else ".rgb_dolp4.npy"
+            self.npy_files[i] = Path(self.im_files[i]).with_suffix(suffix)
         return super().load_image(i, rect_mode, resize_short)
 
     def cache_images_to_disk(self, i: int) -> None:
-        """Write five-channel caches under a modality-specific suffix."""
-        if self.data.get("rgb_dolp_depth"):
-            self.npy_files[i] = Path(self.im_files[i]).with_suffix(".rgb_dolp_depth5.npy")
+        """Write paired modality caches under a modality-specific suffix."""
+        if self.data.get("rgb_dolp_depth") or self.data.get("rgb_dolp"):
+            suffix = ".rgb_dolp_depth5.npy" if self.data.get("rgb_dolp_depth") else ".rgb_dolp4.npy"
+            self.npy_files[i] = Path(self.im_files[i]).with_suffix(suffix)
         return super().cache_images_to_disk(i)
 
     def cache_labels(self, path: Path = Path("./labels.cache")) -> dict:
