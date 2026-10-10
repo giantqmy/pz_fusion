@@ -120,8 +120,8 @@ def infer(model, image, channels, args, device):
     with torch.inference_mode():
         raw = model.model(tensor)
         detections = non_max_suppression(raw, args.conf, args.iou, end2end=model.model.model[-1].end2end)[0]
-    if len(detections):
-        detections[:, :4] = ops.scale_boxes(tensor.shape[2:], detections[:, :4], image.shape[:2])
+        if len(detections):
+            detections[:, :4] = ops.scale_boxes(tensor.shape[2:], detections[:, :4], image.shape[:2])
     return [
         {"class_id": int(row[5]), "class_name": str(model.names[int(row[5])]),
          "confidence": row[4], "xyxy": row[:4]}
