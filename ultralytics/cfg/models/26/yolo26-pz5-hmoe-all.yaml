@@ -1,4 +1,4 @@
-# PZ5: HMoE replaces only P3 fusion; P2/P4/P5 retain depth gates.
+# PZ5: independent HMoE fusion at P2, P3, P4 and P5.
 nc: 6
 channels: 5
 ch: 5
@@ -17,16 +17,16 @@ backbone:
   - [-1, 1, PZPIMStage, [128, 2, 1]]      # 2 P2/4 visual
   - [0, 1, PZDepthStage, [2, 32]]          # 3 depth P1/2
   - [3, 1, PZDepthStage, [2, 32]]          # 4 depth P2/4
-  - [[2, 4], 1, PZDepthFusion, []]         # 5 fused P2
+  - [[2, 4], 1, PZHMoEFusion, [4, 2, 4]] # 5 P2: experts, slots, rank
   - [-1, 1, PZPIMStage, [256, 2, 1]]       # 6 P3/8 visual
   - [4, 1, PZDepthStage, [2, 32]]          # 7 depth P3/8
   - [[6, 7], 1, PZHMoEFusion, [4, 2, 4]] # 8 P3: experts, slots, rank
   - [-1, 1, PZPIMStage, [512, 2, 2]]       # 9 P4/16 visual
   - [7, 1, PZDepthStage, [2, 32]]          # 10 depth P4/16
-  - [[9, 10], 1, PZDepthFusion, []]        # 11 fused P4
+  - [[9, 10], 1, PZHMoEFusion, [4, 2, 4]] # 11 P4: experts, slots, rank
   - [-1, 1, PZPIMStage, [1024, 2, 2]]      # 12 P5/32 visual
   - [10, 1, PZDepthStage, [2, 32]]         # 13 depth P5/32
-  - [[12, 13], 1, PZDepthFusion, []]       # 14 fused P5
+  - [[12, 13], 1, PZHMoEFusion, [4, 2, 4]] # 14 P5: experts, slots, rank
 
 head:
   - [-1, 1, nn.Upsample, [None, 2, nearest]]

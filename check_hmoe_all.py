@@ -26,10 +26,9 @@ with TemporaryDirectory(dir='.') as temp:
     trainer.data = {'nc': 6, 'names': source.names}
     trainer.args = SimpleNamespace(pretrained='synthetic-pz4.pt')
     trainer.save_dir = Path(temp)
-    model = trainer.get_model('ultralytics/cfg/models/26/yolo26-pz5-hmoe-p3.yaml', source, verbose=False)
+    model = trainer.get_model('ultralytics/cfg/models/26/yolo26-pz5-hmoe-all.yaml', source, verbose=False)
     assert trainer.args.freeze == VISUAL_LAYERS
-    assert isinstance(model.model[8], PZHMoEFusion)
-    assert all(isinstance(model.model[i], PZDepthFusion) for i in [5, 11, 14])
+    assert all(isinstance(model.model[i], PZHMoEFusion) for i in FUSION_LAYERS)
     for old, new in zip(range(5), VISUAL_LAYERS):
         assert all(torch.equal(v, model.model[new].state_dict()[k]) for k, v in source.model[old].state_dict().items())
     for old, new in zip(range(5, len(source.model)), range(15, len(model.model))):
@@ -49,13 +48,14 @@ with TemporaryDirectory(dir='.') as temp:
     assert all(p.grad is None for i in VISUAL_LAYERS for p in model.model[i].parameters())
     assert all(torch.equal(old, m.running_mean) for old, m in zip(running, bn))
     assert all(any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.model[i].parameters()) for i in DEPTH_LAYERS)
-    for name in ['gate_thi', 'expert_a', 'expert_b', 'dispatch_temp', 'combine_temp', 'alpha']:
-        grad = getattr(model.model[8], name).grad
-        assert grad is not None and torch.isfinite(grad).all() and grad.abs().sum() > 0, name
+    for i in FUSION_LAYERS:
+        for name in ['gate_thi', 'expert_a', 'expert_b', 'dispatch_temp', 'combine_temp', 'alpha']:
+            grad = getattr(model.model[i], name).grad
+            assert grad is not None and torch.isfinite(grad).all() and grad.abs().sum() > 0, (i, name)
     for handle in handles:
         handle.remove()
     original = object.__new__(PZ5FinetuneTrainer)
     original.data, original.args, original.save_dir = trainer.data, trainer.args, trainer.save_dir
     baseline = original.get_model('ultralytics/cfg/models/26/yolo26-pz5.yaml', source, verbose=False)
     assert all(isinstance(baseline.model[i], PZDepthFusion) for i in FUSION_LAYERS)
-print('PASS: P3-only HMoE, strict visual/neck/head transfer, frozen visual gradients/BN, depth and routing gradients, original trainer')
+print('PASS: P2-P5 HMoE, strict visual/neck/head transfer, frozen visual gradients/BN, depth and routing gradients, original trainer')
