@@ -145,6 +145,7 @@ def evaluate(model, weight, name, data, args):
 
 
 def main(args):
+    args.output = args.output.expanduser().resolve()
     weights = [path.expanduser().resolve() for path in args.weights]
     for path in (*weights, args.data):
         if not path.is_file():
