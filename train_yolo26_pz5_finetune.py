@@ -26,6 +26,8 @@ FUSION_LAYERS = [5, 8, 11, 14]
 class PZ5FinetuneTrainer(PZ5Trainer):
     """Transfer PZ4 weights by semantic layer position instead of state_dict layer number."""
 
+    fusion_types = (PZDepthFusion,)
+
     def get_model(self, cfg=None, weights=None, verbose=True):
         if weights is None or weights.yaml.get("channels") != 4:
             raise ValueError("--weights must be a trained four-channel RGB+DoLP yolo26-pz4 checkpoint")
@@ -48,7 +50,7 @@ class PZ5FinetuneTrainer(PZ5Trainer):
             raise ValueError("Unexpected PZ5 visual layer positions")
         if [i for i, m in enumerate(model.model[:15]) if isinstance(m, PZDepthStage)] != DEPTH_LAYERS:
             raise ValueError("Unexpected PZ5 depth layer positions")
-        if [i for i, m in enumerate(model.model[:15]) if isinstance(m, PZDepthFusion)] != FUSION_LAYERS:
+        if [i for i, m in enumerate(model.model[:15]) if isinstance(m, self.fusion_types)] != FUSION_LAYERS:
             raise ValueError("Unexpected PZ5 fusion layer positions")
         if len(weights.model) - 5 != len(model.model) - 15:
             raise ValueError("PZ4 and PZ5 neck/head layer counts must match")
@@ -86,15 +88,15 @@ class PZ5FinetuneTrainer(PZ5Trainer):
                 "finetuned_neck_and_head_layers": list(range(15, len(model.model))),
             },
         )
-        LOGGER.info("Freeze visual backbone and its BN statistics; train depth/gates and fine-tune neck/Detect")
+        LOGGER.info("Freeze visual backbone and its BN statistics; train depth/fusion and fine-tune neck/Detect")
         return model
 
 
-def main(args):
+def main(args, trainer_cls=PZ5FinetuneTrainer):
     for path in (args.weights, args.model, args.data):
         if not path.is_file():
             raise FileNotFoundError(path)
-    trainer = PZ5FinetuneTrainer(
+    trainer = trainer_cls(
         overrides={
             "task": "detect",
             "mode": "train",
@@ -117,7 +119,8 @@ def main(args):
     trainer.train()
 
 
-if __name__ == "__main__":
+def get_parser():
+    """Build the shared PZ4-to-PZ5 fine-tuning command-line parser."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--weights", type=Path, required=True, help="trained four-channel RGB+DoLP PZ4 checkpoint")
     parser.add_argument("--model", type=Path, default=ROOT / "ultralytics/cfg/models/26/yolo26-pz5.yaml")
@@ -130,4 +133,8 @@ if __name__ == "__main__":
     parser.add_argument("--lr0", type=float, default=1e-4, help="AdamW learning rate for all trainable layers")
     parser.add_argument("--project", type=Path, default=ROOT / "runs/train")
     parser.add_argument("--name", default="yolo26_pz5_from_pz4")
-    main(parser.parse_args())
+    return parser
+
+
+if __name__ == "__main__":
+    main(get_parser().parse_args())

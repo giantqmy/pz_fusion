@@ -79,6 +79,7 @@ from ultralytics.nn.modules import (
     PZPIMStage,
     PZDepthStage,
     PZDepthFusion,
+    PZHMoEFusion,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -2140,7 +2141,7 @@ def parse_model(d, ch, verbose=True):
             c1 = ch[f[0]] if isinstance(f, list) else ch[f]
             c2 = args[2] if len(args) > 2 else 32
             args = [c1, *args]
-        elif m is PZDepthFusion:
+        elif m in {PZDepthFusion, PZHMoEFusion}:
             c2 = ch[f[0]]
             args = [c2, ch[f[1]], *args]
         elif m is AIFI:

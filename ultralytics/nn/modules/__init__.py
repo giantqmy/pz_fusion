@@ -107,13 +107,14 @@ from .transformer import (
     TransformerEncoderLayer,
     TransformerLayer,
 )
-from .pz import PZPIMStage, PZDepthStage, PZDepthFusion
+from .pz import PZPIMStage, PZDepthStage, PZDepthFusion, PZHMoEFusion
 
 __all__ = (
     "AIFI",
     "PZPIMStage",
     "PZDepthStage",
     "PZDepthFusion",
+    "PZHMoEFusion",
     "C1",
     "C2",
     "C2PSA",

@@ -78,3 +78,59 @@ class PZDepthFusion(nn.Module):
         if depth.shape[-2:] != visual.shape[-2:]:
             depth = F.interpolate(depth, size=visual.shape[-2:], mode="bilinear", align_corners=False)
         return visual + torch.sigmoid(self.gate(torch.cat((visual, depth), dim=1))) * depth
+
+
+class PZHMoEFusion(nn.Module):
+    """Update visual features using SEATrack-style soft routing over visual and depth tokens."""
+
+    def __init__(self, channels, depth_channels=32, experts=4, slots=2, rank=4):
+        super().__init__()
+        if channels % slots:
+            raise ValueError("HMoE channels must be divisible by slots")
+        self.experts, self.slots = experts, slots
+        self.depth_proj = nn.Sequential(
+            nn.Conv2d(depth_channels, channels, 1, bias=False), nn.BatchNorm2d(channels), nn.SiLU()
+        )
+        self.norm = nn.LayerNorm(channels)
+        self.linear1 = self._projection(channels, rank)
+        self.linear2 = self._projection(channels, rank)
+        sub_dim = channels // slots
+        self.gate_thi = nn.Parameter(torch.randn(sub_dim, experts * slots) * sub_dim**-0.5)
+        self.expert_a = nn.Parameter(torch.empty(experts, sub_dim, rank))
+        self.expert_b = nn.Parameter(torch.empty(experts, rank, sub_dim))
+        self.bias_a = nn.Parameter(torch.zeros(experts, 1, rank))
+        self.bias_b = nn.Parameter(torch.zeros(experts, 1, sub_dim))
+        nn.init.xavier_normal_(self.expert_a, gain=2**0.5)
+        nn.init.xavier_normal_(self.expert_b, gain=2**0.5)
+        self.drop = nn.Dropout(0.1)
+        # softplus(raw) + epsilon starts at 1 and keeps both temperatures positive.
+        self.dispatch_temp = nn.Parameter(torch.tensor(0.54116665))
+        self.combine_temp = nn.Parameter(torch.tensor(0.54116665))
+        self.alpha = nn.Parameter(torch.tensor(0.01))
+
+    @staticmethod
+    def _projection(channels, rank):
+        return nn.Sequential(nn.Linear(channels, rank), nn.Dropout(0.1), nn.Linear(rank, channels), nn.Dropout(0.1))
+
+    def forward(self, inputs):
+        visual, depth = inputs
+        depth = self.depth_proj(depth)
+        if depth.shape[-2:] != visual.shape[-2:]:
+            depth = F.interpolate(depth, size=visual.shape[-2:], mode="bilinear", align_corners=False)
+        batch, channels, height, width = visual.shape
+        pixels = height * width
+        tokens = torch.cat((visual.flatten(2).transpose(1, 2), depth.flatten(2).transpose(1, 2)), dim=1)
+        count = tokens.shape[1]
+        x = self.linear1(self.norm(tokens)).reshape(batch, count * self.slots, channels // self.slots)
+        # Normalize routing scores in float32 under mixed precision.
+        logits = (x @ self.gate_thi).float()
+        dispatch = (logits / (F.softplus(self.dispatch_temp.float()) + 1e-4)).softmax(dim=1)
+        combine = logits.reshape(batch, count, self.slots, self.experts, self.slots).sum(dim=(2, 4))
+        combine = (combine / (F.softplus(self.combine_temp.float()) + 1e-4)).softmax(dim=-1)
+        expert_inputs = torch.bmm(dispatch.transpose(1, 2).to(x.dtype), x)
+        expert_inputs = expert_inputs.reshape(batch, self.experts, self.slots, channels // self.slots)
+        outputs = self.drop(expert_inputs @ self.expert_a + self.bias_a) @ self.expert_b + self.bias_b
+        outputs = self.linear2(self.drop(outputs).reshape(batch, self.experts, channels))
+        mixed = torch.bmm(combine.to(outputs.dtype), outputs)
+        delta = mixed[:, :pixels].transpose(1, 2).reshape(batch, channels, height, width)
+        return visual + self.alpha * delta
