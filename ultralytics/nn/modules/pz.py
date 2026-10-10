@@ -112,6 +112,9 @@ class PZHMoEFusion(nn.Module):
     def _projection(channels, rank):
         return nn.Sequential(nn.Linear(channels, rank), nn.Dropout(0.1), nn.Linear(rank, channels), nn.Dropout(0.1))
 
+    def _readout(self, mixed, pixels):
+        return mixed[:, :pixels]
+
     def forward(self, inputs):
         visual, depth = inputs
         depth = self.depth_proj(depth)
@@ -132,5 +135,17 @@ class PZHMoEFusion(nn.Module):
         outputs = self.drop(expert_inputs @ self.expert_a + self.bias_a) @ self.expert_b + self.bias_b
         outputs = self.linear2(self.drop(outputs).reshape(batch, self.experts, channels))
         mixed = torch.bmm(combine.to(outputs.dtype), outputs)
-        delta = mixed[:, :pixels].transpose(1, 2).reshape(batch, channels, height, width)
+        delta = self._readout(mixed, pixels).transpose(1, 2).reshape(batch, channels, height, width)
         return visual + self.alpha * delta
+
+
+class PZHMoEJointFusion(PZHMoEFusion):
+    """Project paired visual/depth HMoE outputs from 2C to C channels at each spatial position."""
+
+    def __init__(self, channels: int, depth_channels: int = 32, experts: int = 4, slots: int = 2, rank: int = 4):
+        super().__init__(channels, depth_channels, experts, slots, rank)
+        self.joint_proj = nn.Linear(2 * channels, channels)
+
+    def _readout(self, mixed, pixels):
+        paired = torch.cat((mixed[:, :pixels], mixed[:, pixels:]), dim=-1)
+        return self.joint_proj(paired)

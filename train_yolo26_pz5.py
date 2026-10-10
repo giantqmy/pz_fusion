@@ -53,10 +53,12 @@ def main(args):
         project=str(args.project),
         name=args.name,
         pretrained=False,
+        freeze=0,
     )
 
 
-if __name__ == "__main__":
+def get_parser():
+    """Build the five-channel training command-line parser."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=Path, default=ROOT / "ultralytics/cfg/models/26/yolo26-pz5.yaml")
     parser.add_argument("--data", type=Path, default=ROOT / "ultralytics/cfg/datasets/pz6qu-rgb-dolp-depth.yaml")
@@ -67,4 +69,8 @@ if __name__ == "__main__":
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--project", type=Path, default=ROOT / "runs/train")
     parser.add_argument("--name", default="yolo26_pz5")
-    main(parser.parse_args())
+    return parser
+
+
+if __name__ == "__main__":
+    main(get_parser().parse_args())
