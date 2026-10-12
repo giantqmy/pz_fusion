@@ -40,10 +40,10 @@ class PZ5Trainer(DetectionTrainer):
         return PZ5Validator(self.test_loader, save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks)
 
 
-def main(args):
+def main(args, trainer_cls=PZ5Trainer):
     model = YOLO(str(args.model))
     model.train(
-        trainer=PZ5Trainer,
+        trainer=trainer_cls,
         data=str(args.data),
         imgsz=args.imgsz,
         epochs=args.epochs,

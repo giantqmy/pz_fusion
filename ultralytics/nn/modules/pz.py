@@ -1,4 +1,6 @@
-"""Small PIM/SAFF-style blocks for the five-channel PZ YOLO26 model."""
+"""PZ visual/depth blocks, including dual-branch wavelet PIM and sparse SAFF fusion."""
+
+import math
 
 import torch
 from torch import nn
@@ -35,6 +37,257 @@ class PZPIMStage(nn.Module):
         if self.first:
             x = x[:, :4]
         return self.pim(self.proj(x))
+
+
+class _VisualConvNeXtBlock(nn.Module):
+    """ConvNeXt with LayerNorm and layer scale, matching the original dual visual backbone."""
+
+    def __init__(self, channels):
+        super().__init__()
+        self.dwconv = nn.Conv2d(channels, channels, 7, padding=3, groups=channels)
+        self.norm = nn.LayerNorm(channels, eps=1e-6)
+        self.pwconv1 = nn.Linear(channels, 4 * channels)
+        self.act = nn.GELU()
+        self.pwconv2 = nn.Linear(4 * channels, channels)
+        self.gamma = nn.Parameter(torch.full((channels,), 1e-6))
+        nn.init.normal_(self.dwconv.weight, std=math.sqrt(2.0 / 49))
+        nn.init.zeros_(self.dwconv.bias)
+        for layer in (self.pwconv1, self.pwconv2):
+            nn.init.trunc_normal_(layer.weight, std=0.02)
+            nn.init.zeros_(layer.bias)
+
+    def forward(self, x):
+        y = self.norm(self.dwconv(x).permute(0, 2, 3, 1))
+        y = self.gamma * self.pwconv2(self.act(self.pwconv1(y)))
+        return x + y.permute(0, 3, 1, 2)
+
+
+class _HaarDWT(nn.Module):
+    """Fixed per-channel Haar decomposition with padding for odd feature sizes."""
+
+    def __init__(self, channels):
+        super().__init__()
+        filters = torch.tensor(
+            [[[1.0, 1.0], [1.0, 1.0]], [[-1.0, -1.0], [1.0, 1.0]],
+             [[-1.0, 1.0], [-1.0, 1.0]], [[1.0, -1.0], [-1.0, 1.0]]]
+        ) / 2
+        self.register_buffer("weight", filters[:, None].repeat(channels, 1, 1, 1))
+
+    def forward(self, x):
+        batch, channels, height, width = x.shape
+        x = F.pad(x, (0, width % 2, 0, height % 2))
+        bands = F.conv2d(x, self.weight.to(dtype=x.dtype), stride=2, groups=channels)
+        bands = bands.reshape(batch, channels, 4, *bands.shape[-2:])
+        return bands[:, :, 0], torch.cat(tuple(bands[:, :, i] for i in (1, 2, 3)), dim=1)
+
+
+class _WaveletS0DoLPFusion(nn.Module):
+    """Fuse RGB intensity and DoLP independently in low and high Haar bands."""
+
+    def __init__(self, channels):
+        super().__init__()
+        self.dwt = _HaarDWT(channels)
+
+        def gate(in_channels):
+            return nn.Sequential(
+                nn.Conv2d(in_channels, channels, 1, bias=False), nn.BatchNorm2d(channels),
+                nn.SiLU(inplace=True), nn.Conv2d(channels, 2, 1),
+            )
+
+        def proj(in_channels):
+            return nn.Sequential(
+                nn.Conv2d(in_channels, channels, 1, bias=False), nn.BatchNorm2d(channels), nn.SiLU(inplace=True)
+            )
+
+        self.low_gate = gate(channels * 2)
+        self.high_gate = gate(channels * 6)
+        self.high_proj = proj(channels * 3)
+        self.out_proj = proj(channels * 2)
+
+    def forward(self, rgb, dolp):
+        low_rgb, high_rgb = self.dwt(rgb)
+        low_dolp, high_dolp = self.dwt(dolp)
+        low_w = self.low_gate(torch.cat((low_rgb, low_dolp), dim=1)).softmax(dim=1)
+        high_w = self.high_gate(torch.cat((high_rgb, high_dolp), dim=1)).softmax(dim=1)
+        low = low_rgb * low_w[:, :1] + low_dolp * low_w[:, 1:]
+        high = self.high_proj(high_rgb * high_w[:, :1] + high_dolp * high_w[:, 1:])
+        low = F.interpolate(low, size=rgb.shape[-2:], mode="bilinear", align_corners=False)
+        high = F.interpolate(high, size=rgb.shape[-2:], mode="bilinear", align_corners=False)
+        return self.out_proj(torch.cat((low, high), dim=1))
+
+
+class _WaveletPIM(nn.Module):
+    """PoolFormer branch refinement and shared wavelet residual from the original PIM."""
+
+    def __init__(self, channels):
+        super().__init__()
+        self.norm1_s0 = nn.BatchNorm2d(channels)
+        self.norm1_dolp = nn.BatchNorm2d(channels)
+        self.norm2_s0 = nn.BatchNorm2d(channels)
+        self.norm2_dolp = nn.BatchNorm2d(channels)
+        self.pool = nn.AvgPool2d(3, stride=1, padding=1, count_include_pad=False)
+        self.mlp_s0 = nn.Sequential(
+            nn.Conv2d(channels, channels * 4, 1), nn.GELU(), nn.Conv2d(channels * 4, channels, 1)
+        )
+        self.mlp_dolp = nn.Sequential(
+            nn.Conv2d(channels, channels * 4, 1), nn.GELU(), nn.Conv2d(channels * 4, channels, 1)
+        )
+        self.wavelet_fusion = _WaveletS0DoLPFusion(channels)
+        self.layer_scale_1_s0 = nn.Parameter(torch.full((channels,), 1e-5))
+        self.layer_scale_1_dolp = nn.Parameter(torch.full((channels,), 1e-5))
+        self.layer_scale_2_s0 = nn.Parameter(torch.full((channels,), 1e-5))
+        self.layer_scale_2_dolp = nn.Parameter(torch.full((channels,), 1e-5))
+        self.fusion_scale = nn.Parameter(torch.tensor(0.5))
+
+    @staticmethod
+    def _scale(gamma, x):
+        return gamma.view(1, -1, 1, 1) * x
+
+    def forward(self, rgb, dolp):
+        n_rgb, n_dolp = self.norm1_s0(rgb), self.norm1_dolp(dolp)
+        rgb = rgb + self._scale(self.layer_scale_1_s0, self.pool(n_rgb) - n_rgb)
+        dolp = dolp + self._scale(self.layer_scale_1_dolp, self.pool(n_dolp) - n_dolp)
+        n_rgb, n_dolp = self.norm2_s0(rgb), self.norm2_dolp(dolp)
+        fusion = self.fusion_scale * self.wavelet_fusion(n_rgb, n_dolp)
+        rgb = rgb + self._scale(self.layer_scale_2_s0, self.mlp_s0(n_rgb))
+        dolp = dolp + self._scale(self.layer_scale_2_dolp, self.mlp_dolp(n_dolp))
+        return rgb + fusion, dolp + fusion
+
+
+class PZDualPIMStage(nn.Module):
+    """Preserve separate RGB/DoLP states through a dual ConvNeXt and wavelet PIM backbone.
+
+    Args:
+        c_in (int): Five raw input channels or the preceding dual PIM state's channel count.
+        c_out (int): Total output channels, split equally between the two branches.
+        stride (int): Downsample stride, either 2 or a two-step stride 4 stem.
+        depth (int): Number of ConvNeXt blocks per branch.
+    """
+
+    def __init__(self, c_in: int, c_out: int, stride: int = 2, depth: int = 1):
+        super().__init__()
+        if c_out % 2 or stride not in (2, 4) or depth < 1:
+            raise ValueError("Dual PIM requires even output channels, stride 2/4 and positive depth")
+        self.first = c_in == 5
+        self.branch_channels = (3, 1) if self.first else (c_in // 2, c_in // 2)
+        if not self.first and c_in % 2:
+            raise ValueError("Dual PIM backbone states must have even channels")
+        half = c_out // 2
+
+        def branch(in_channels):
+            if stride == 4:
+                mid = max(1, half // 2)
+                stem = [
+                    nn.Conv2d(in_channels, mid, 3, stride=2, padding=1, bias=False),
+                    nn.BatchNorm2d(mid), nn.SiLU(),
+                    nn.Conv2d(mid, half, 3, stride=2, padding=1, bias=False),
+                    nn.BatchNorm2d(half), nn.SiLU(),
+                ]
+            else:
+                stem = [nn.Conv2d(in_channels, half, 2, stride=2, bias=False), nn.BatchNorm2d(half), nn.SiLU()]
+            return nn.Sequential(*stem, *(_VisualConvNeXtBlock(half) for _ in range(depth)))
+
+        self.branch1 = branch(self.branch_channels[0])
+        self.branch2 = branch(self.branch_channels[1])
+        self.pim = _WaveletPIM(half)
+
+    def forward(self, x):
+        if self.first:
+            x = x[:, :4]
+        rgb, dolp = torch.split(x, self.branch_channels, dim=1)
+        rgb, dolp = self.pim(self.branch1(rgb), self.branch2(dolp))
+        return torch.cat((rgb, dolp), dim=1)
+
+
+class _SparseSAFF(nn.Module):
+    """Top-k window attention with aligned K1/V2 and K2/V1 routing, matching original SAFF."""
+
+    def __init__(self, channels, topk, n_win, kv_ratio):
+        super().__init__()
+        if not 0 < topk <= n_win * n_win or kv_ratio < 1:
+            raise ValueError("SAFF requires positive KV ratio and topk within the window count")
+        self.channels, self.topk, self.n_win = channels, topk, n_win
+        self.kv_ratio = kv_ratio
+        self.scale = channels**-0.5
+        self.qkv1 = nn.Linear(channels, 3 * channels)
+        self.qkv2 = nn.Linear(channels, 3 * channels)
+        self.kv_down = nn.AvgPool2d(kv_ratio) if kv_ratio > 1 else nn.Identity()
+        self.residual1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.residual2 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+
+    def _partition(self, x):
+        batch, channels, height, width = x.shape
+        return x.reshape(batch, channels, self.n_win, height // self.n_win, self.n_win, width // self.n_win).permute(
+            0, 2, 4, 3, 5, 1
+        ).reshape(batch, self.n_win**2, height // self.n_win, width // self.n_win, channels)
+
+    def _flatten_kv(self, kv):
+        batch, windows, height, width, channels = kv.shape
+        kv = self.kv_down(kv.permute(0, 1, 4, 2, 3).reshape(batch * windows, channels, height, width))
+        return kv.reshape(batch, windows, channels, -1).transpose(-2, -1)
+
+    def _attend(self, query, own_kv, other_kv):
+        channels = self.channels
+        q_win = query.mean((2, 3)).detach()
+        k_win = own_kv[..., :channels].mean((2, 3)).detach()
+        route = ((q_win * self.scale) @ k_win.transpose(-2, -1)).topk(self.topk, dim=-1).indices
+        own_kv, other_kv = self._flatten_kv(own_kv), self._flatten_kv(other_kv)
+        kv = torch.cat((own_kv[..., :channels], other_kv[..., channels:]), dim=-1)
+        batch, windows, pixels, features = kv.shape
+        selected = torch.gather(
+            kv[:, None].expand(-1, windows, -1, -1, -1), 2,
+            route[..., None, None].expand(-1, -1, -1, pixels, features),
+        ).reshape(batch, windows, self.topk * pixels, features)
+        key, value = selected.split(channels, dim=-1)
+        query = query.flatten(2, 3)
+        attention = ((query * self.scale) @ key.transpose(-2, -1)).softmax(dim=-1)
+        return attention @ value
+
+    def _restore(self, x, height, width):
+        return (
+            x.reshape(x.shape[0], self.n_win, self.n_win, height // self.n_win, width // self.n_win, self.channels)
+            .permute(0, 5, 1, 3, 2, 4)
+            .reshape(x.shape[0], self.channels, height, width)
+        )
+
+    def forward(self, rgb, dolp):
+        if rgb.shape != dolp.shape:
+            raise ValueError("SAFF requires aligned RGB and DoLP features")
+        height, width = rgb.shape[-2:]
+        residual_rgb, residual_dolp = self.residual1(rgb), self.residual2(dolp)
+        # Rectangular validation inputs can otherwise produce windows smaller than the K/V pooling kernel.
+        padded_h = max(math.ceil(height / self.n_win), self.kv_ratio) * self.n_win
+        padded_w = max(math.ceil(width / self.n_win), self.kv_ratio) * self.n_win
+        pad = (0, padded_w - width, 0, padded_h - height)
+        rgb, dolp = F.pad(rgb, pad), F.pad(dolp, pad)
+        q1, kv1 = self.qkv1(self._partition(rgb)).split((self.channels, 2 * self.channels), dim=-1)
+        q2, kv2 = self.qkv2(self._partition(dolp)).split((self.channels, 2 * self.channels), dim=-1)
+        # Each branch routes its own keys with the other branch's values at the same window indices.
+        to_dolp = self._restore(self._attend(q1, kv1, kv2), *rgb.shape[-2:])[..., :height, :width]
+        to_rgb = self._restore(self._attend(q2, kv2, kv1), *rgb.shape[-2:])[..., :height, :width]
+        return residual_rgb + to_rgb, residual_dolp + to_dolp
+
+
+class PZSAFFLateral(nn.Module):
+    """Fuse a dual PIM state for the PAN lateral while leaving the backbone state separate.
+
+    Args:
+        channels (int): Total channels of the concatenated RGB and DoLP state.
+        topk (int): Number of routed windows per query window.
+        n_win (int): Number of windows along each spatial axis.
+        kv_ratio (int): Average pooling ratio within each K/V window.
+    """
+
+    def __init__(self, channels: int, topk: int = 4, n_win: int = 8, kv_ratio: int = 4):
+        super().__init__()
+        if channels % 2:
+            raise ValueError("SAFF lateral requires even channels")
+        self.saff = _SparseSAFF(channels // 2, topk, n_win, kv_ratio)
+        self.out_fuse = nn.Sequential(nn.Conv2d(channels, channels, 1, bias=False), nn.BatchNorm2d(channels), nn.SiLU())
+
+    def forward(self, x):
+        rgb, dolp = self.saff(*x.chunk(2, dim=1))
+        return self.out_fuse(torch.cat((rgb, dolp), dim=1))
 
 
 class PZDepthStage(nn.Module):

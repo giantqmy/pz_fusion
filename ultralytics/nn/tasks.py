@@ -77,6 +77,8 @@ from ultralytics.nn.modules import (
     YOLOESegment26,
     v10Detect,
     PZPIMStage,
+    PZDualPIMStage,
+    PZSAFFLateral,
     PZDepthStage,
     PZDepthFusion,
     PZHMoEFusion,
@@ -2134,10 +2136,13 @@ def parse_model(d, ch, verbose=True):
                     args.extend((True, 1.2))
             if m is C2fCIB:
                 legacy = False
-        elif m is PZPIMStage:
+        elif m in {PZPIMStage, PZDualPIMStage}:
             c1, c2 = ch[f], args[0]
             c2 = make_divisible(min(c2, max_channels) * width, 8)
             args = [c1, c2, *args[1:]]
+        elif m is PZSAFFLateral:
+            c2 = ch[f]
+            args = [c2, *args]
         elif m is PZDepthStage:
             c1 = ch[f[0]] if isinstance(f, list) else ch[f]
             c2 = args[2] if len(args) > 2 else 32
