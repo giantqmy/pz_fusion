@@ -109,21 +109,9 @@ class YOLODataset(BaseDataset):
         if not self.data.get("rgb_dolp"):
             return super().load_image_file(path, flags)
 
-        path = Path(path)
-        rgb_path = path.with_name(f"{path.stem}_S0_rgb.png")
-        dolp_path = path.with_name(f"{path.stem}_dolp_rgb.png")
-        rgb = super().load_image_file(str(rgb_path), cv2.IMREAD_COLOR)
-        dolp = super().load_image_file(str(dolp_path), cv2.IMREAD_GRAYSCALE)
-        if rgb is None or dolp is None:
-            missing = rgb_path if rgb is None else dolp_path
-            raise FileNotFoundError(f"Missing required RGB-DoLP input file: {missing}")
-        if dolp.ndim == 3 and dolp.shape[-1] == 1:
-            dolp = dolp[..., 0]
-        if dolp.ndim != 2:
-            raise ValueError(f"Expected single-channel DoLP image, got shape {dolp.shape}: {dolp_path}")
-        if rgb.shape[:2] != dolp.shape[:2]:
-            raise ValueError(f"RGB and DoLP sizes differ: {rgb_path} {rgb.shape[:2]} vs {dolp_path} {dolp.shape[:2]}")
-        return np.concatenate((cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB), dolp[..., None]), axis=2)
+        from ultralytics.data.pz_modalities import load_rgb_dolp
+
+        return load_rgb_dolp(path)
 
     def load_image(self, i: int, rect_mode: bool = True, resize_short: bool = False):
         """Keep paired modalities' caches separate from plain image caches."""
