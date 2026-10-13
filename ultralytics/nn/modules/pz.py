@@ -62,6 +62,13 @@ class _VisualConvNeXtBlock(nn.Module):
         return x + y.permute(0, 3, 1, 2)
 
 
+class _ChannelLayerNorm(nn.LayerNorm):
+    """Apply LayerNorm over channels of an NCHW feature tensor."""
+
+    def forward(self, x):
+        return super().forward(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+
+
 class _HaarDWT(nn.Module):
     """Fixed per-channel Haar decomposition with padding for odd feature sizes."""
 
@@ -172,23 +179,21 @@ class _DualVisualStage(nn.Module):
         self.branch_channels = (3, 1) if self.first else (c_in // 2, c_in // 2)
         if not self.first and c_in % 2:
             raise ValueError("Dual visual backbone states must have even channels")
-        half = c_out // 2
+        self.branch1 = self._make_branch(self.branch_channels[0], c_out // 2, stride, depth)
+        self.branch2 = self._make_branch(self.branch_channels[1], c_out // 2, stride, depth)
 
-        def branch(in_channels):
-            if stride == 4:
-                mid = max(1, half // 2)
-                stem = [
-                    nn.Conv2d(in_channels, mid, 3, stride=2, padding=1, bias=False),
-                    nn.BatchNorm2d(mid), nn.SiLU(),
-                    nn.Conv2d(mid, half, 3, stride=2, padding=1, bias=False),
-                    nn.BatchNorm2d(half), nn.SiLU(),
-                ]
-            else:
-                stem = [nn.Conv2d(in_channels, half, 2, stride=2, bias=False), nn.BatchNorm2d(half), nn.SiLU()]
-            return nn.Sequential(*stem, *(_VisualConvNeXtBlock(half) for _ in range(depth)))
-
-        self.branch1 = branch(self.branch_channels[0])
-        self.branch2 = branch(self.branch_channels[1])
+    def _make_branch(self, in_channels, half, stride, depth):
+        if stride == 4:
+            mid = max(1, half // 2)
+            stem = [
+                nn.Conv2d(in_channels, mid, 3, stride=2, padding=1, bias=False),
+                nn.BatchNorm2d(mid), nn.SiLU(),
+                nn.Conv2d(mid, half, 3, stride=2, padding=1, bias=False),
+                nn.BatchNorm2d(half), nn.SiLU(),
+            ]
+        else:
+            stem = [nn.Conv2d(in_channels, half, 2, stride=2, bias=False), nn.BatchNorm2d(half), nn.SiLU()]
+        return nn.Sequential(*stem, *(_VisualConvNeXtBlock(half) for _ in range(depth)))
 
     def _features(self, x):
         if self.first:
@@ -214,6 +219,24 @@ class PZDualPIMStage(_DualVisualStage):
     def forward(self, x):
         rgb, dolp = self.pim(*self._features(x))
         return torch.cat((rgb, dolp), dim=1)
+
+
+class PZConvNeXtPIMStage(PZDualPIMStage):
+    """Extract dual visual features with ConvNeXt stems/downsampling before wavelet PIM.
+
+    Args:
+        c_in (int): Five raw input channels or the preceding dual state's channel count.
+        c_out (int): Total output channels, split equally between the two branches.
+        stride (int): Downsample stride, 4 for the patch stem or 2 for later stages.
+        depth (int): Number of ConvNeXt blocks per branch.
+    """
+
+    def _make_branch(self, in_channels, half, stride, depth):
+        if stride == 4:
+            stem = [nn.Conv2d(in_channels, half, 4, stride=4), _ChannelLayerNorm(half, eps=1e-6)]
+        else:
+            stem = [_ChannelLayerNorm(in_channels, eps=1e-6), nn.Conv2d(in_channels, half, 2, stride=2)]
+        return nn.Sequential(*stem, *(_VisualConvNeXtBlock(half) for _ in range(depth)))
 
 
 class _FAMChannelWeights(nn.Module):

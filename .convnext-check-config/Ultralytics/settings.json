@@ -1,0 +1,19 @@
+{
+  "settings_version": "0.0.8",
+  "datasets_dir": "D:\\Desktop\\txt\\txt2\\rewrite\\datasets",
+  "weights_dir": "D:\\Desktop\\txt\\txt2\\rewrite\\ultralytics-hmoe-joint-scratch\\weights",
+  "runs_dir": "D:\\Desktop\\txt\\txt2\\rewrite\\ultralytics-hmoe-joint-scratch\\runs",
+  "uuid": "1ffe4ad510153a3e89fc1e0454f9819bb41b4f9deaf9df23eab726e1185c1de5",
+  "sync": true,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "mlflow": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}

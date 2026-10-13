@@ -110,6 +110,7 @@ from .transformer import (
 from .pz import (
     PZPIMStage,
     PZDualPIMStage,
+    PZConvNeXtPIMStage,
     PZDualFAMStage,
     PZSAFFLateral,
     PZDepthStage,
@@ -122,6 +123,7 @@ __all__ = (
     "AIFI",
     "PZPIMStage",
     "PZDualPIMStage",
+    "PZConvNeXtPIMStage",
     "PZDualFAMStage",
     "PZSAFFLateral",
     "PZDepthStage",

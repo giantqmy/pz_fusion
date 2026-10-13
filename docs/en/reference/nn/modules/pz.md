@@ -24,6 +24,10 @@ keywords: Ultralytics, ultralytics.nn.modules.pz, API reference, YOLO, Python
 
 <br><br><hr><br>
 
+## ::: ultralytics.nn.modules.pz._ChannelLayerNorm
+
+<br><br><hr><br>
+
 ## ::: ultralytics.nn.modules.pz._HaarDWT
 
 <br><br><hr><br>
@@ -41,6 +45,10 @@ keywords: Ultralytics, ultralytics.nn.modules.pz, API reference, YOLO, Python
 <br><br><hr><br>
 
 ## ::: ultralytics.nn.modules.pz.PZDualPIMStage
+
+<br><br><hr><br>
+
+## ::: ultralytics.nn.modules.pz.PZConvNeXtPIMStage
 
 <br><br><hr><br>
 
