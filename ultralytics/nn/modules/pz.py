@@ -1,4 +1,4 @@
-"""PZ visual/depth blocks, including dual-branch wavelet PIM and sparse SAFF fusion."""
+"""PZ visual/depth blocks, including dual-branch PIM/FAM and sparse SAFF fusion."""
 
 import math
 
@@ -154,11 +154,11 @@ class _WaveletPIM(nn.Module):
         return rgb + fusion, dolp + fusion
 
 
-class PZDualPIMStage(nn.Module):
-    """Preserve separate RGB/DoLP states through a dual ConvNeXt and wavelet PIM backbone.
+class _DualVisualStage(nn.Module):
+    """Shared RGB/DoLP stems and ConvNeXt blocks for PIM and FAM stages.
 
     Args:
-        c_in (int): Five raw input channels or the preceding dual PIM state's channel count.
+        c_in (int): Five raw input channels or the preceding dual state's channel count.
         c_out (int): Total output channels, split equally between the two branches.
         stride (int): Downsample stride, either 2 or a two-step stride 4 stem.
         depth (int): Number of ConvNeXt blocks per branch.
@@ -167,11 +167,11 @@ class PZDualPIMStage(nn.Module):
     def __init__(self, c_in: int, c_out: int, stride: int = 2, depth: int = 1):
         super().__init__()
         if c_out % 2 or stride not in (2, 4) or depth < 1:
-            raise ValueError("Dual PIM requires even output channels, stride 2/4 and positive depth")
+            raise ValueError("Dual visual stages require even output channels, stride 2/4 and positive depth")
         self.first = c_in == 5
         self.branch_channels = (3, 1) if self.first else (c_in // 2, c_in // 2)
         if not self.first and c_in % 2:
-            raise ValueError("Dual PIM backbone states must have even channels")
+            raise ValueError("Dual visual backbone states must have even channels")
         half = c_out // 2
 
         def branch(in_channels):
@@ -189,13 +189,106 @@ class PZDualPIMStage(nn.Module):
 
         self.branch1 = branch(self.branch_channels[0])
         self.branch2 = branch(self.branch_channels[1])
-        self.pim = _WaveletPIM(half)
 
-    def forward(self, x):
+    def _features(self, x):
         if self.first:
             x = x[:, :4]
         rgb, dolp = torch.split(x, self.branch_channels, dim=1)
-        rgb, dolp = self.pim(self.branch1(rgb), self.branch2(dolp))
+        return self.branch1(rgb), self.branch2(dolp)
+
+
+class PZDualPIMStage(_DualVisualStage):
+    """Preserve dual ConvNeXt states with wavelet PIM interaction.
+
+    Args:
+        c_in (int): Five raw input channels or the preceding dual state's channel count.
+        c_out (int): Total output channels, split equally between the two branches.
+        stride (int): Downsample stride, either 2 or a two-step stride 4 stem.
+        depth (int): Number of ConvNeXt blocks per branch.
+    """
+
+    def __init__(self, c_in: int, c_out: int, stride: int = 2, depth: int = 1):
+        super().__init__(c_in, c_out, stride, depth)
+        self.pim = _WaveletPIM(c_out // 2)
+
+    def forward(self, x):
+        rgb, dolp = self.pim(*self._features(x))
+        return torch.cat((rgb, dolp), dim=1)
+
+
+class _FAMChannelWeights(nn.Module):
+    """Original FAM channel gates from modality-weighted average and maximum descriptors."""
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        self.mlp_avg = nn.Sequential(nn.Linear(dim, dim), nn.ReLU(inplace=True), nn.Linear(dim, 2))
+        self.mlp_max = nn.Sequential(nn.Linear(dim, dim), nn.ReLU(inplace=True), nn.Linear(dim, 2))
+        self.mlp = nn.Sequential(nn.Linear(dim, dim), nn.ReLU(inplace=True), nn.Linear(dim, dim), nn.Sigmoid())
+
+    def forward(self, rgb, dolp):
+        batch, channels = rgb.shape[:2]
+        x = torch.cat((rgb, dolp), dim=1)
+        avg = self.avg_pool(x).view(batch, 2 * channels)
+        avg_attn = self.mlp_avg(avg).softmax(dim=-1)
+        avg_rgb, avg_dolp = (avg_attn.view(batch, 2, 1) * avg.view(batch, 2, channels)).chunk(2, dim=1)
+        avg_x = (avg_rgb + avg_dolp).view(batch, channels)
+        maximum = self.max_pool(x).view(batch, 2 * channels)
+        max_attn = self.mlp_max(maximum).softmax(dim=-1)
+        max_rgb, max_dolp = (max_attn.view(batch, 2, 1) * maximum.view(batch, 2, channels)).chunk(2, dim=1)
+        max_x = (max_rgb + max_dolp).view(batch, channels)
+        weights = self.mlp(torch.cat((avg_x, max_x), dim=1))
+        return weights.reshape(batch, 2, channels, 1, 1).permute(1, 0, 2, 3, 4)
+
+
+class _FAMSpatialWeights(nn.Module):
+    """Original FAM spatial gates from concatenated RGB and DoLP features."""
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.mlp = nn.Sequential(nn.Conv2d(dim, dim, 1), nn.ReLU(inplace=True), nn.Conv2d(dim, 2, 1), nn.Sigmoid())
+
+    def forward(self, rgb, dolp):
+        batch, _, height, width = rgb.shape
+        weights = self.mlp(torch.cat((rgb, dolp), dim=1))
+        return weights.reshape(batch, 2, 1, height, width).permute(1, 0, 2, 3, 4)
+
+
+class _FeatureAlignmentModule(nn.Module):
+    """Match PZ_8 FAM with reduction=1 and fixed channel/spatial residual scales of 0.5."""
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.lambda_c = 0.5
+        self.lambda_s = 0.5
+        self.channel_weights = _FAMChannelWeights(dim)
+        self.spatial_weights = _FAMSpatialWeights(dim)
+
+    def forward(self, rgb, dolp):
+        channel = self.channel_weights(rgb, dolp)
+        spatial = self.spatial_weights(rgb, dolp)
+        out_rgb = rgb + self.lambda_c * channel[1] * dolp + self.lambda_s * spatial[1] * dolp
+        out_dolp = dolp + self.lambda_c * channel[0] * rgb + self.lambda_s * spatial[0] * rgb
+        return out_rgb, out_dolp
+
+
+class PZDualFAMStage(_DualVisualStage):
+    """Preserve dual ConvNeXt states with the channel/spatial FAM from PZ_8.
+
+    Args:
+        c_in (int): Five raw input channels or the preceding dual state's channel count.
+        c_out (int): Total output channels, split equally between the two branches.
+        stride (int): Downsample stride, either 2 or a two-step stride 4 stem.
+        depth (int): Number of ConvNeXt blocks per branch.
+    """
+
+    def __init__(self, c_in: int, c_out: int, stride: int = 2, depth: int = 1):
+        super().__init__(c_in, c_out, stride, depth)
+        self.fam = _FeatureAlignmentModule(c_out)
+
+    def forward(self, x):
+        rgb, dolp = self.fam(*self._features(x))
         return torch.cat((rgb, dolp), dim=1)
 
 

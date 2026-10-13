@@ -78,6 +78,7 @@ from ultralytics.nn.modules import (
     v10Detect,
     PZPIMStage,
     PZDualPIMStage,
+    PZDualFAMStage,
     PZSAFFLateral,
     PZDepthStage,
     PZDepthFusion,
@@ -2136,7 +2137,7 @@ def parse_model(d, ch, verbose=True):
                     args.extend((True, 1.2))
             if m is C2fCIB:
                 legacy = False
-        elif m in {PZPIMStage, PZDualPIMStage}:
+        elif m in {PZPIMStage, PZDualPIMStage, PZDualFAMStage}:
             c1, c2 = ch[f], args[0]
             c2 = make_divisible(min(c2, max_channels) * width, 8)
             args = [c1, c2, *args[1:]]

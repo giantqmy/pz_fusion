@@ -36,7 +36,27 @@ keywords: Ultralytics, ultralytics.nn.modules.pz, API reference, YOLO, Python
 
 <br><br><hr><br>
 
+## ::: ultralytics.nn.modules.pz._DualVisualStage
+
+<br><br><hr><br>
+
 ## ::: ultralytics.nn.modules.pz.PZDualPIMStage
+
+<br><br><hr><br>
+
+## ::: ultralytics.nn.modules.pz._FAMChannelWeights
+
+<br><br><hr><br>
+
+## ::: ultralytics.nn.modules.pz._FAMSpatialWeights
+
+<br><br><hr><br>
+
+## ::: ultralytics.nn.modules.pz._FeatureAlignmentModule
+
+<br><br><hr><br>
+
+## ::: ultralytics.nn.modules.pz.PZDualFAMStage
 
 <br><br><hr><br>
 
