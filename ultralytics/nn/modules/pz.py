@@ -342,13 +342,16 @@ class _SparseSAFF(nn.Module):
         kv = self.kv_down(kv.permute(0, 1, 4, 2, 3).reshape(batch * windows, channels, height, width))
         return kv.reshape(batch, windows, channels, -1).transpose(-2, -1)
 
-    def _attend(self, query, own_kv, other_kv):
+    def _attention_values(self, kv1, kv2):
+        return kv2[..., self.channels:], kv1[..., self.channels:]
+
+    def _attend(self, query, own_kv, value):
         channels = self.channels
         q_win = query.mean((2, 3)).detach()
         k_win = own_kv[..., :channels].mean((2, 3)).detach()
         route = ((q_win * self.scale) @ k_win.transpose(-2, -1)).topk(self.topk, dim=-1).indices
-        own_kv, other_kv = self._flatten_kv(own_kv), self._flatten_kv(other_kv)
-        kv = torch.cat((own_kv[..., :channels], other_kv[..., channels:]), dim=-1)
+        key, value = self._flatten_kv(own_kv[..., :channels]), self._flatten_kv(value)
+        kv = torch.cat((key, value), dim=-1)
         batch, windows, pixels, features = kv.shape
         selected = torch.gather(
             kv[:, None].expand(-1, windows, -1, -1, -1), 2,
@@ -378,10 +381,23 @@ class _SparseSAFF(nn.Module):
         rgb, dolp = F.pad(rgb, pad), F.pad(dolp, pad)
         q1, kv1 = self.qkv1(self._partition(rgb)).split((self.channels, 2 * self.channels), dim=-1)
         q2, kv2 = self.qkv2(self._partition(dolp)).split((self.channels, 2 * self.channels), dim=-1)
-        # Each branch routes its own keys with the other branch's values at the same window indices.
-        to_dolp = self._restore(self._attend(q1, kv1, kv2), *rgb.shape[-2:])[..., :height, :width]
-        to_rgb = self._restore(self._attend(q2, kv2, kv1), *rgb.shape[-2:])[..., :height, :width]
+        value1, value2 = self._attention_values(kv1, kv2)
+        # Each branch routes its own keys and gathers values at the same window indices.
+        to_dolp = self._restore(self._attend(q1, kv1, value1), *rgb.shape[-2:])[..., :height, :width]
+        to_rgb = self._restore(self._attend(q2, kv2, value2), *rgb.shape[-2:])[..., :height, :width]
         return residual_rgb + to_rgb, residual_dolp + to_dolp
+
+
+class _SparseSAFFConcat(_SparseSAFF):
+    """Route each modality's own Q/K over a shared linear fusion of aligned RGB/DoLP values."""
+
+    def __init__(self, channels: int, topk: int, n_win: int, kv_ratio: int):
+        super().__init__(channels, topk, n_win, kv_ratio)
+        self.value_fuse = nn.Linear(2 * channels, channels)
+
+    def _attention_values(self, kv1, kv2):
+        fused = self.value_fuse(torch.cat((kv1[..., self.channels:], kv2[..., self.channels:]), dim=-1))
+        return fused, fused
 
 
 class PZSAFFLateral(nn.Module):
@@ -394,16 +410,31 @@ class PZSAFFLateral(nn.Module):
         kv_ratio (int): Average pooling ratio within each K/V window.
     """
 
+    attention_type = _SparseSAFF
+
     def __init__(self, channels: int, topk: int = 4, n_win: int = 8, kv_ratio: int = 4):
         super().__init__()
         if channels % 2:
             raise ValueError("SAFF lateral requires even channels")
-        self.saff = _SparseSAFF(channels // 2, topk, n_win, kv_ratio)
+        self.saff = self.attention_type(channels // 2, topk, n_win, kv_ratio)
         self.out_fuse = nn.Sequential(nn.Conv2d(channels, channels, 1, bias=False), nn.BatchNorm2d(channels), nn.SiLU())
 
     def forward(self, x):
         rgb, dolp = self.saff(*x.chunk(2, dim=1))
         return self.out_fuse(torch.cat((rgb, dolp), dim=1))
+
+
+class PZSAFFConcatLateral(PZSAFFLateral):
+    """Fuse SAFFConcat's two residual outputs into one visual lateral for depth HMoE.
+
+    Args:
+        channels (int): Total channels of the concatenated RGB and DoLP state.
+        topk (int): Number of routed windows per query window.
+        n_win (int): Number of windows along each spatial axis.
+        kv_ratio (int): Average pooling ratio within each K/V window.
+    """
+
+    attention_type = _SparseSAFFConcat
 
 
 class PZDepthStage(nn.Module):

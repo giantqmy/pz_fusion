@@ -8,13 +8,14 @@ class PZ5PIMSAFFHMoETrainer(PZ5Trainer):
     """Use five-channel modality normalization and require the dual-backbone fusion graph."""
 
     stage_type = PZDualPIMStage
+    lateral_type = PZSAFFLateral
 
     def get_model(self, cfg=None, weights=None, verbose=True):
         model = super().get_model(cfg=cfg, weights=weights, verbose=verbose)
         stages = (1, 6, 10, 14)
         laterals = (2, 7, 11, 15)
         fusions = (5, 9, 13, 17)
-        for module, indices in ((self.stage_type, stages), (PZSAFFLateral, laterals), (PZHMoEJointFusion, fusions)):
+        for module, indices in ((self.stage_type, stages), (self.lateral_type, laterals), (PZHMoEJointFusion, fusions)):
             if tuple(i for i, layer in enumerate(model.model) if isinstance(layer, module)) != indices:
                 raise ValueError(f"Expected {module.__name__} at layers {indices}")
         if tuple(model.model[i].f for i in stages) != (0, 1, 6, 10):

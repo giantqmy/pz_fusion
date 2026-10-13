@@ -72,7 +72,15 @@ keywords: Ultralytics, ultralytics.nn.modules.pz, API reference, YOLO, Python
 
 <br><br><hr><br>
 
+## ::: ultralytics.nn.modules.pz._SparseSAFFConcat
+
+<br><br><hr><br>
+
 ## ::: ultralytics.nn.modules.pz.PZSAFFLateral
+
+<br><br><hr><br>
+
+## ::: ultralytics.nn.modules.pz.PZSAFFConcatLateral
 
 <br><br><hr><br>
 
