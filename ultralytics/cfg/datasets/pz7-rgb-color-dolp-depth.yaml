@@ -1,0 +1,16 @@
+# Seven-channel input: RGB (3), color DoLP (3), raw uint16 depth (1).
+path: /media/ddc/新加卷/hys/qmy/pz
+train: train.txt
+val: val.txt
+channels: 7
+ch: 7
+rgb_dolp_depth: true
+dolp_root: /media/ddc/新加卷/hys/qmy/pz/DOLP_rgb
+dolp_channels: 3
+names:
+  0: Pedestrian
+  1: Car
+  2: Cyclist
+  3: Truck
+  4: Bus
+  5: Tricycle

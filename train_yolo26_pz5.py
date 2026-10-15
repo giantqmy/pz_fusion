@@ -25,7 +25,7 @@ class PZ5Validator(DetectionValidator):
 
 class PZ5Trainer(DetectionTrainer):
     def build_dataset(self, img_path, mode="train", batch=None):
-        self.data["channels"] = 5
+        self.data.setdefault("channels", 5)
         self.data["rgb_dolp_depth"] = True
         return super().build_dataset(img_path, mode, batch)
 
@@ -50,6 +50,7 @@ def main(args, trainer_cls=PZ5Trainer):
         batch=args.batch,
         workers=args.workers,
         device=args.device,
+        rect=args.rect,
         project=str(args.project),
         name=args.name,
         pretrained=False,
@@ -67,6 +68,7 @@ def get_parser():
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch", type=int, default=4)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--rect", action="store_true", help="Use rectangular batches during training.")
     parser.add_argument("--project", type=Path, default=ROOT / "runs/train")
     parser.add_argument("--name", default="yolo26_pz5")
     return parser

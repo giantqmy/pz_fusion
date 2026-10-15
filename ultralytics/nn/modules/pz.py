@@ -19,12 +19,12 @@ class _ConvNeXtBlock(nn.Module):
 
 
 class PZPIMStage(nn.Module):
-    """Visual RGB+DoLP stage; the first stage consumes the first four input channels."""
+    """Visual RGB+DoLP stage; the first stage excludes the final depth channel."""
 
     def __init__(self, c_in, c_out, stride=2, depth=1):
         super().__init__()
-        self.first = c_in == 5
-        visual_in = 4 if self.first else c_in
+        self.first = c_in in {5, 7}
+        visual_in = c_in - 1 if self.first else c_in
         self.proj = nn.Sequential(
             nn.Conv2d(visual_in, c_out, 3, stride=stride, padding=1, bias=False),
             nn.BatchNorm2d(c_out),
@@ -35,7 +35,7 @@ class PZPIMStage(nn.Module):
 
     def forward(self, x):
         if self.first:
-            x = x[:, :4]
+            x = x[:, :-1]
         return self.pim(self.proj(x))
 
 
@@ -165,7 +165,7 @@ class _DualVisualStage(nn.Module):
     """Shared RGB/DoLP stems and ConvNeXt blocks for PIM and FAM stages.
 
     Args:
-        c_in (int): Five raw input channels or the preceding dual state's channel count.
+        c_in (int): Five or seven raw input channels or the preceding dual state's channel count.
         c_out (int): Total output channels, split equally between the two branches.
         stride (int): Downsample stride, either 2 or a two-step stride 4 stem.
         depth (int): Number of ConvNeXt blocks per branch.
@@ -175,8 +175,8 @@ class _DualVisualStage(nn.Module):
         super().__init__()
         if c_out % 2 or stride not in (2, 4) or depth < 1:
             raise ValueError("Dual visual stages require even output channels, stride 2/4 and positive depth")
-        self.first = c_in == 5
-        self.branch_channels = (3, 1) if self.first else (c_in // 2, c_in // 2)
+        self.first = c_in in {5, 7}
+        self.branch_channels = (3, c_in - 4) if self.first else (c_in // 2, c_in // 2)
         if not self.first and c_in % 2:
             raise ValueError("Dual visual backbone states must have even channels")
         self.branch1 = self._make_branch(self.branch_channels[0], c_out // 2, stride, depth)
@@ -197,7 +197,7 @@ class _DualVisualStage(nn.Module):
 
     def _features(self, x):
         if self.first:
-            x = x[:, :4]
+            x = x[:, :-1]
         rgb, dolp = torch.split(x, self.branch_channels, dim=1)
         return self.branch1(rgb), self.branch2(dolp)
 
@@ -438,11 +438,11 @@ class PZSAFFConcatLateral(PZSAFFLateral):
 
 
 class PZDepthStage(nn.Module):
-    """One cascaded depth stage. The first stage extracts channel 4 from raw five-channel input."""
+    """One cascaded depth stage. The first stage extracts the final raw input channel."""
 
     def __init__(self, c_in, stride=2, width=32):
         super().__init__()
-        self.from_raw = c_in == 5
+        self.from_raw = c_in in {5, 7}
         self.block = nn.Sequential(
             nn.Conv2d(1 if self.from_raw else c_in, width, 3, stride=int(stride), padding=1, bias=False),
             nn.BatchNorm2d(width), nn.SiLU(), _ConvNeXtBlock(width),
@@ -457,7 +457,7 @@ class PZDepthStage(nn.Module):
                 raise ValueError(f"PZDepthStage expects one tensor, got {len(x)} inputs")
             x = x[0]
         if self.from_raw:
-            x = x[:, 4:5]
+            x = x[:, -1:]
         return self.block(x)
 
 

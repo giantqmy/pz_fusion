@@ -105,7 +105,7 @@ class YOLODataset(BaseDataset):
         if self.data.get("rgb_dolp_depth"):
             from ultralytics.data.pz_modalities import load_rgb_dolp_depth
 
-            return load_rgb_dolp_depth(path)
+            return load_rgb_dolp_depth(path, self.data.get("dolp_root"), self.data.get("dolp_channels", 1))
         if not self.data.get("rgb_dolp"):
             return super().load_image_file(path, flags)
 
@@ -122,15 +122,15 @@ class YOLODataset(BaseDataset):
         return np.concatenate((cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB), dolp), axis=2)
 
     def load_image(self, i: int, rect_mode: bool = True, resize_short: bool = False):
-        """Keep five-channel disk cache separate from ordinary image caches."""
+        """Keep paired modality disk caches separate from ordinary image caches."""
         if self.data.get("rgb_dolp_depth"):
-            self.npy_files[i] = Path(self.im_files[i]).with_suffix(".rgb_dolp_depth5.npy")
+            self.npy_files[i] = Path(self.im_files[i]).with_suffix(f".rgb_dolp_depth{self.data['channels']}.npy")
         return super().load_image(i, rect_mode, resize_short)
 
     def cache_images_to_disk(self, i: int) -> None:
-        """Write five-channel caches under a modality-specific suffix."""
+        """Write paired modality caches under a channel-specific suffix."""
         if self.data.get("rgb_dolp_depth"):
-            self.npy_files[i] = Path(self.im_files[i]).with_suffix(".rgb_dolp_depth5.npy")
+            self.npy_files[i] = Path(self.im_files[i]).with_suffix(f".rgb_dolp_depth{self.data['channels']}.npy")
         return super().cache_images_to_disk(i)
 
     def cache_labels(self, path: Path = Path("./labels.cache")) -> dict:
