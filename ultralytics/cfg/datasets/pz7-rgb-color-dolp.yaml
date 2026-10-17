@@ -1,0 +1,16 @@
+# Six-channel visual-only input: RGB (3) + color DoLP (3), no depth.
+path: /media/ddc/新加卷/hys/qmy/pz
+train: train.txt
+val: val.txt
+channels: 6
+ch: 6
+rgb_dolp: true
+dolp_root: /media/ddc/新加卷/hys/qmy/pz/DOLP_rgb
+dolp_channels: 3
+names:
+  0: Pedestrian
+  1: Car
+  2: Cyclist
+  3: Truck
+  4: Bus
+  5: Tricycle

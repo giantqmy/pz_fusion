@@ -165,7 +165,7 @@ class _DualVisualStage(nn.Module):
     """Shared RGB/DoLP stems and ConvNeXt blocks for PIM and FAM stages.
 
     Args:
-        c_in (int): Five or seven raw input channels or the preceding dual state's channel count.
+        c_in (int): Five, six or seven raw input channels or the preceding dual state's channel count.
         c_out (int): Total output channels, split equally between the two branches.
         stride (int): Downsample stride, either 2 or a two-step stride 4 stem.
         depth (int): Number of ConvNeXt blocks per branch.
@@ -206,7 +206,7 @@ class PZDualPIMStage(_DualVisualStage):
     """Preserve dual ConvNeXt states with wavelet PIM interaction.
 
     Args:
-        c_in (int): Five raw input channels or the preceding dual state's channel count.
+        c_in (int): Five, six or seven raw input channels or the preceding dual state's channel count.
         c_out (int): Total output channels, split equally between the two branches.
         stride (int): Downsample stride, either 2 or a two-step stride 4 stem.
         depth (int): Number of ConvNeXt blocks per branch.
