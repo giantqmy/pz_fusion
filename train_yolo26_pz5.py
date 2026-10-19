@@ -41,7 +41,7 @@ class PZ5Trainer(DetectionTrainer):
 
 
 def main(args, trainer_cls=PZ5Trainer):
-    model = YOLO(str(args.model))
+    model = YOLO(str(args.resume or args.model))
     model.train(
         trainer=trainer_cls,
         data=str(args.data),
@@ -55,6 +55,7 @@ def main(args, trainer_cls=PZ5Trainer):
         name=args.name,
         pretrained=False,
         freeze=0,
+        resume=str(args.resume) if args.resume else False,
     )
 
 
@@ -71,6 +72,7 @@ def get_parser():
     parser.add_argument("--rect", action="store_true", help="Use rectangular batches during training.")
     parser.add_argument("--project", type=Path, default=ROOT / "runs/train")
     parser.add_argument("--name", default="yolo26_pz5")
+    parser.add_argument("--resume", type=Path, default=None, help="Path to an interrupted training last.pt checkpoint.")
     return parser
 
 
