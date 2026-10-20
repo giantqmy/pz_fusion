@@ -56,6 +56,7 @@ def main(args, trainer_cls=PZ5Trainer):
         pretrained=False,
         freeze=0,
         resume=str(args.resume) if args.resume else False,
+        val=getattr(args, "val", True),
     )
 
 
@@ -73,6 +74,7 @@ def get_parser():
     parser.add_argument("--project", type=Path, default=ROOT / "runs/train")
     parser.add_argument("--name", default="yolo26_pz5")
     parser.add_argument("--resume", type=Path, default=None, help="Path to an interrupted training last.pt checkpoint.")
+    parser.add_argument("--val", action=argparse.BooleanOptionalAction, default=True, help="Run validation during training.")
     return parser
 
 

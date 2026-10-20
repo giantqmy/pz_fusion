@@ -1,0 +1,11 @@
+# RGB-P Car uses its official train/test split; validation is disabled during training.
+path: /media/ddc/新加卷/hys/qmy/pz/RGB-P Car
+train: train.txt
+val: test.txt
+channels: 6
+ch: 6
+rgb_dolp: true
+dolp_root: /media/ddc/新加卷/hys/qmy/pz/RGB-P Car/images/rgb_dolp
+dolp_channels: 3
+names:
+  0: Car
