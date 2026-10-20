@@ -188,7 +188,15 @@ class FeatureRecorder:
                 stage_numbers[name] += 1
 
                 def before(_module, inputs, n=f"hmoe/{level}/before_fusion"):
-                    self._put(n, inputs[0] if len(inputs) == 1 else inputs)
+                    # YAML ``from: [visual_lateral, depth]`` arrives as one list
+                    # argument.  Name the two modalities explicitly so they are
+                    # not mistaken for two RGB/DoLP branches.
+                    values = inputs[0] if len(inputs) == 1 else inputs
+                    if isinstance(values, (tuple, list)) and len(values) == 2:
+                        self._put(f"{n}/visual", values[0])
+                        self._put(f"{n}/depth", values[1])
+                    else:
+                        self._put(n, values)
 
                 self.handles.extend(
                     [
