@@ -7,6 +7,39 @@ from torch import nn
 import torch.nn.functional as F
 
 
+class FusePol(nn.Module):
+    """Fuse raw three-channel AoLP and DoLP, preserving RGB as a separate branch."""
+
+    def __init__(self, c1: int, c2: int = 6):
+        super().__init__()
+        if c1 != 9 or c2 != 6:
+            raise ValueError(f"FusePol expects 9 input and 6 output channels, got {c1} and {c2}")
+        self.conv_sattn = nn.Sequential(nn.Conv2d(2, 1, 7, padding=3), nn.Sigmoid())
+        self.degree_max_map = nn.Sequential(
+            nn.Conv2d(3, 3, 3, padding=1, bias=False), nn.BatchNorm2d(3), nn.SiLU(),
+            nn.MaxPool2d(5, stride=1, padding=2), nn.Sigmoid(),
+        )
+        self.conv_aop = nn.Sequential(nn.Conv2d(3, 3, 3, padding=1, bias=False), nn.BatchNorm2d(3), nn.SiLU())
+        self.conv_dop = nn.Sequential(nn.Conv2d(3, 3, 3, padding=1, bias=False), nn.BatchNorm2d(3), nn.SiLU())
+        self.conv_pol = nn.Sequential(nn.Conv2d(6, 3, 3, padding=1, bias=False), nn.BatchNorm2d(3), nn.SiLU())
+        self.register_buffer("scharr_x", torch.tensor([[-3, 0, 3], [-10, 0, 10], [-3, 0, 3]], dtype=torch.float32)[None, None])
+        self.register_buffer("scharr_y", torch.tensor([[-3, -10, -3], [0, 0, 0], [3, 10, 3]], dtype=torch.float32)[None, None])
+
+    def forward(self, x):
+        rgb, aop, dop = x[:, :3], x[:, 3:6], x[:, 6:9]
+        maximum, _ = dop.max(dim=1, keepdim=True)
+        average = dop.mean(dim=1, keepdim=True)
+        weighted_aop = aop * (self.conv_sattn(torch.cat((maximum, average), dim=1)) + self.degree_max_map(dop))
+        gray_dop = dop.mean(dim=1, keepdim=True)
+        grad_x = F.conv2d(gray_dop, self.scharr_x.to(dtype=x.dtype), padding=1)
+        grad_y = F.conv2d(gray_dop, self.scharr_y.to(dtype=x.dtype), padding=1)
+        edge = torch.sqrt(grad_x.square() + grad_y.square() + 1e-6)
+        edge = edge / (edge.amax(dim=(-2, -1), keepdim=True) + 1e-6)
+        weighted_dop = dop + edge
+        pol = self.conv_pol(torch.cat((self.conv_aop(weighted_aop), self.conv_dop(weighted_dop)), dim=1))
+        return torch.cat((rgb, pol), dim=1)
+
+
 class _ConvNeXtBlock(nn.Module):
     def __init__(self, channels: int):
         super().__init__()

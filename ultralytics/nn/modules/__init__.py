@@ -108,6 +108,7 @@ from .transformer import (
     TransformerLayer,
 )
 from .pz import (
+    FusePol,
     PZPIMStage,
     PZDualPIMStage,
     PZConvNeXtPIMStage,
@@ -121,6 +122,7 @@ from .pz import (
 )
 
 __all__ = (
+    "FusePol",
     "AIFI",
     "PZPIMStage",
     "PZDualPIMStage",

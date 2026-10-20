@@ -1,0 +1,11 @@
+# RGB-P Car paired RGB, AoLP and color DoLP input.
+path: /media/ddc/新加卷/hys/qmy/pz/RGB-P Car
+train: train_aolp_dolp.txt
+val: test_aolp_dolp.txt
+channels: 9
+ch: 9
+rgb_aolp_dolp: true
+aolp_channels: 3
+dolp_channels: 3
+names:
+  0: Car

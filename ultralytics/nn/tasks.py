@@ -86,6 +86,7 @@ from ultralytics.nn.modules import (
     PZDepthFusion,
     PZHMoEFusion,
     PZHMoEJointFusion,
+    FusePol,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,
@@ -2139,6 +2140,9 @@ def parse_model(d, ch, verbose=True):
                     args.extend((True, 1.2))
             if m is C2fCIB:
                 legacy = False
+        elif m is FusePol:
+            c1, c2 = ch[f], 6
+            args = [c1, c2]
         elif m in {PZPIMStage, PZDualPIMStage, PZConvNeXtPIMStage, PZDualFAMStage}:
             c1, c2 = ch[f], args[0]
             c2 = make_divisible(min(c2, max_channels) * width, 8)

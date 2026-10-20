@@ -102,6 +102,16 @@ class YOLODataset(BaseDataset):
 
     def load_image_file(self, path: str, flags: int | None = None) -> np.ndarray | None:
         """Load paired RGB/DoLP, optionally with uint16 depth, in fixed RGB-first channel order."""
+        if self.data.get("rgb_aolp_dolp"):
+            from ultralytics.data.pz_modalities import load_rgb_aolp_dolp
+
+            return load_rgb_aolp_dolp(
+                path,
+                self.data.get("aolp_root"),
+                self.data.get("dolp_root"),
+                self.data.get("aolp_channels", 3),
+                self.data.get("dolp_channels", 3),
+            )
         if self.data.get("rgb_dolp_depth"):
             from ultralytics.data.pz_modalities import load_rgb_dolp_depth
 
@@ -115,15 +125,15 @@ class YOLODataset(BaseDataset):
 
     def load_image(self, i: int, rect_mode: bool = True, resize_short: bool = False):
         """Keep paired modality disk caches separate from ordinary image caches."""
-        if self.data.get("rgb_dolp_depth") or self.data.get("rgb_dolp"):
-            modality = "rgb_dolp_depth" if self.data.get("rgb_dolp_depth") else "rgb_dolp"
+        if self.data.get("rgb_aolp_dolp") or self.data.get("rgb_dolp_depth") or self.data.get("rgb_dolp"):
+            modality = "rgb_aolp_dolp" if self.data.get("rgb_aolp_dolp") else "rgb_dolp_depth" if self.data.get("rgb_dolp_depth") else "rgb_dolp"
             self.npy_files[i] = Path(self.im_files[i]).with_suffix(f".{modality}{self.data['channels']}.npy")
         return super().load_image(i, rect_mode, resize_short)
 
     def cache_images_to_disk(self, i: int) -> None:
         """Write paired modality caches under a channel-specific suffix."""
-        if self.data.get("rgb_dolp_depth") or self.data.get("rgb_dolp"):
-            modality = "rgb_dolp_depth" if self.data.get("rgb_dolp_depth") else "rgb_dolp"
+        if self.data.get("rgb_aolp_dolp") or self.data.get("rgb_dolp_depth") or self.data.get("rgb_dolp"):
+            modality = "rgb_aolp_dolp" if self.data.get("rgb_aolp_dolp") else "rgb_dolp_depth" if self.data.get("rgb_dolp_depth") else "rgb_dolp"
             self.npy_files[i] = Path(self.im_files[i]).with_suffix(f".{modality}{self.data['channels']}.npy")
         return super().cache_images_to_disk(i)
 
