@@ -57,9 +57,6 @@ def main(args, trainer_cls=PZ5Trainer):
         freeze=0,
         resume=str(args.resume) if args.resume else False,
         val=getattr(args, "val", True),
-        lr0=args.lr0,
-        lrf=args.lrf,
-        cos_lr=args.cos_lr,
     )
 
 
@@ -78,9 +75,6 @@ def get_parser():
     parser.add_argument("--name", default="yolo26_pz5")
     parser.add_argument("--resume", type=Path, default=None, help="Path to an interrupted training last.pt checkpoint.")
     parser.add_argument("--val", action=argparse.BooleanOptionalAction, default=True, help="Run validation during training.")
-    parser.add_argument("--lr0", type=float, default=0.01, help="Initial learning rate.")
-    parser.add_argument("--lrf", type=float, default=0.1, help="Final learning-rate fraction; 0.1 gives 0.001 from lr0=0.01.")
-    parser.add_argument("--cos-lr", action=argparse.BooleanOptionalAction, default=True, help="Use cosine learning-rate scheduling.")
     return parser
 
 
