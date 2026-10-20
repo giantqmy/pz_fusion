@@ -68,6 +68,8 @@ def prepare_dataset(dataset):
             label_root.mkdir(parents=True, exist_ok=True)
             fused_stem = f"{split}_{stem}"
             fused_image = fused_root / f"{fused_stem}.tiff"
+            if not cv2.imwrite(str(fused_image), rgb):
+                raise OSError(f"Failed to write dataset image: {fused_image}")
             if not cv2.imwrite(str(fused_root / f"{fused_stem}_S0_rgb.png"), rgb):
                 raise OSError(f"Failed to write RGB image: {fused_stem}")
             if not cv2.imwrite(str(fused_root / f"{fused_stem}_dolp_color_rgb.png"), dolp_color):
