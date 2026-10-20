@@ -63,8 +63,10 @@ def prepare_dataset(dataset):
             dolp_gray = cv2.normalize(dolp, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
             dolp_color = cv2.applyColorMap(dolp_gray, cv2.COLORMAP_JET)
             fused_root = dataset / "images" / "rgb_dolp" / split
+            dolp_root = dataset / "images" / "rgb_dolp"
             label_root = dataset / "labels" / "rgb_dolp" / split
             fused_root.mkdir(parents=True, exist_ok=True)
+            dolp_root.mkdir(parents=True, exist_ok=True)
             label_root.mkdir(parents=True, exist_ok=True)
             fused_stem = f"{split}_{stem}"
             fused_image = fused_root / f"{fused_stem}.tiff"
@@ -72,7 +74,7 @@ def prepare_dataset(dataset):
                 raise OSError(f"Failed to write dataset image: {fused_image}")
             if not cv2.imwrite(str(fused_root / f"{fused_stem}_S0_rgb.png"), rgb):
                 raise OSError(f"Failed to write RGB image: {fused_stem}")
-            if not cv2.imwrite(str(fused_root / f"{fused_stem}_dolp_color_rgb.png"), dolp_color):
+            if not cv2.imwrite(str(dolp_root / f"{fused_stem}_dolp_color_rgb.png"), dolp_color):
                 raise OSError(f"Failed to write color DoLP image: {fused_stem}")
             label_lines = []
             width, height = record["width"], record["height"]
