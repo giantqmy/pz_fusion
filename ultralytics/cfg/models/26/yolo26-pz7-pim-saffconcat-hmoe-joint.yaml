@@ -15,20 +15,20 @@ backbone:
   # PIM args: [total channels, stride, ConvNeXt depth].
   # SAFFConcat args: [topk, windows per side, KV pooling ratio].
   - [-1, 1, nn.Identity, []]                       # 0 RGB (3), color DoLP (3), depth (1)
-  - [0, 1, PZDualPIMStage, [128, 4, 1]]            # 1 P2 dual state
+  - [0, 1, PZDualWTStage, [128, 4, 1]]             # 1 P2 dual wavelet state
   - [1, 1, PZSAFFConcatLateral, [2, 16, 4]]        # 2 P2 visual lateral
   - [0, 1, PZDepthStage, [2, 32]]                  # 3 depth P1
   - [3, 1, PZDepthStage, [2, 32]]                  # 4 depth P2
   - [[2, 4], 1, PZHMoEJointFusion, [4, 2, 4]]      # 5 fused P2
-  - [1, 1, PZDualPIMStage, [256, 2, 1]]            # 6 P3 dual state
+  - [1, 1, PZDualWTStage, [256, 2, 1]]             # 6 P3 dual wavelet state
   - [6, 1, PZSAFFConcatLateral, [2, 8, 4]]         # 7 P3 visual lateral
   - [4, 1, PZDepthStage, [2, 32]]                  # 8 depth P3
   - [[7, 8], 1, PZHMoEJointFusion, [4, 2, 4]]      # 9 fused P3
-  - [6, 1, PZDualPIMStage, [512, 2, 2]]            # 10 P4 dual state
+  - [6, 1, PZDualWTStage, [512, 2, 2]]             # 10 P4 dual wavelet state
   - [10, 1, PZSAFFConcatLateral, [4, 4, 4]]        # 11 P4 visual lateral
   - [8, 1, PZDepthStage, [2, 32]]                  # 12 depth P4
   - [[11, 12], 1, PZHMoEJointFusion, [4, 2, 4]]    # 13 fused P4
-  - [10, 1, PZDualPIMStage, [1024, 2, 1]]          # 14 P5 dual state
+  - [10, 1, PZDualWTStage, [1024, 2, 1]]           # 14 P5 dual wavelet state
   - [14, 1, PZSAFFConcatLateral, [8, 4, 2]]        # 15 P5 visual lateral
   - [12, 1, PZDepthStage, [2, 32]]                 # 16 depth P5
   - [[15, 16], 1, PZHMoEJointFusion, [4, 2, 4]]    # 17 fused P5

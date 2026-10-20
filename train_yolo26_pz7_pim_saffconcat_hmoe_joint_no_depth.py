@@ -5,7 +5,7 @@ from ultralytics.models.yolo.detect import DetectionTrainer
 from ultralytics.nn.modules.pz import (
     PZDepthFusion,
     PZDepthStage,
-    PZDualPIMStage,
+    PZDualWTStage,
     PZHMoEFusion,
     PZSAFFConcatLateral,
 )
@@ -24,8 +24,8 @@ class PZ7NoDepthTrainer(PZ5Trainer):
         model = super().get_model(cfg=cfg, weights=weights, verbose=verbose)
         stages = (1, 3, 5, 7)
         laterals = (2, 4, 6, 8)
-        if tuple(i for i, layer in enumerate(model.model) if isinstance(layer, PZDualPIMStage)) != stages:
-            raise ValueError(f"Expected PZDualPIMStage modules at layers {stages}")
+        if tuple(i for i, layer in enumerate(model.model) if isinstance(layer, PZDualWTStage)) != stages:
+            raise ValueError(f"Expected PZDualWTStage modules at layers {stages}")
         if tuple(i for i, layer in enumerate(model.model) if isinstance(layer, PZSAFFConcatLateral)) != laterals:
             raise ValueError(f"Expected PZSAFFConcatLateral modules at layers {laterals}")
         depth_modules = (PZDepthStage, PZDepthFusion, PZHMoEFusion)

@@ -194,6 +194,88 @@ class _WaveletPIM(nn.Module):
         return rgb + fusion, dolp + fusion
 
 
+class _HaarIDWT(nn.Module):
+    """Fixed inverse of ``_HaarDWT`` for four C-channel Haar subbands."""
+
+    def __init__(self, channels):
+        super().__init__()
+        self.dwt = _HaarDWT(channels)
+        self.channels = channels
+
+    def forward(self, ll, lh, hl, hh, output_size=None):
+        coeffs = torch.stack((ll, lh, hl, hh), dim=2).flatten(1, 2)
+        x = F.conv_transpose2d(coeffs, self.dwt.weight.to(dtype=coeffs.dtype), stride=2, groups=self.channels)
+        if output_size is not None:
+            x = x[..., : output_size[0], : output_size[1]]
+        return x
+
+
+class pim_dualWT(nn.Module):
+    """Dual RGB/DoLP wavelet fusion with difference-guided per-band gates.
+
+    Each modality is decomposed into LL/LH/HL/HH bands. Every band has an
+    independent gate that uses mapped-modal differences as auxiliary context,
+    then the four fused C-channel bands are reconstructed by fixed Haar IDWT.
+    """
+
+    _BANDS = ("ll", "lh", "hl", "hh")
+
+    def __init__(self, channels):
+        super().__init__()
+        if channels < 1:
+            raise ValueError("pim_dualWT requires a positive channel count")
+        self.channels = channels
+        self.dwt = _HaarDWT(channels)
+        self.idwt = _HaarIDWT(channels)
+        self.rgb_compare = nn.ModuleList(nn.Conv2d(channels, channels, 1, bias=False) for _ in self._BANDS)
+        self.dolp_compare = nn.ModuleList(nn.Conv2d(channels, channels, 1, bias=False) for _ in self._BANDS)
+        hidden = max(4, channels // 4)
+        self.gates = nn.ModuleList(
+            nn.Sequential(
+                nn.Conv2d(channels * 3, hidden, 1, bias=False),
+                nn.BatchNorm2d(hidden),
+                nn.SiLU(inplace=True),
+                nn.Conv2d(hidden, 2, 1),
+            )
+            for _ in self._BANDS
+        )
+        self.adapter_rgb = nn.Conv2d(channels, channels, 1, bias=False)
+        self.adapter_dolp = nn.Conv2d(channels, channels, 1, bias=False)
+        self.gamma_rgb = nn.Parameter(torch.full((channels,), 1e-3))
+        self.gamma_dolp = nn.Parameter(torch.full((channels,), 1e-3))
+
+    def _decompose(self, x):
+        ll, high = self.dwt(x)
+        return (ll, *high.chunk(3, dim=1))
+
+    def _fuse_band(self, rgb, dolp, index):
+        rgb_mapped = self.rgb_compare[index](rgb)
+        dolp_mapped = self.dolp_compare[index](dolp)
+        difference = (rgb_mapped - dolp_mapped).abs()
+        logits = self.gates[index](torch.cat((rgb, dolp, difference), dim=1))
+        weights = logits.softmax(dim=1)
+        fused = rgb * weights[:, :1] + dolp * weights[:, 1:2]
+        return fused, weights
+
+    def forward(self, rgb, dolp, return_weights=False):
+        if rgb.shape != dolp.shape or rgb.ndim != 4:
+            raise ValueError("pim_dualWT expects RGB and DoLP tensors with the same BCHW shape")
+        height, width = rgb.shape[-2:]
+        rgb_bands = self._decompose(rgb)
+        dolp_bands = self._decompose(dolp)
+        fused_bands, weights = [], []
+        for index, (rgb_band, dolp_band) in enumerate(zip(rgb_bands, dolp_bands)):
+            fused, band_weights = self._fuse_band(rgb_band, dolp_band, index)
+            fused_bands.append(fused)
+            weights.append(band_weights)
+        fused = self.idwt(*fused_bands, output_size=(height, width))
+        rgb_out = rgb + self.gamma_rgb.view(1, -1, 1, 1) * self.adapter_rgb(fused)
+        dolp_out = dolp + self.gamma_dolp.view(1, -1, 1, 1) * self.adapter_dolp(fused)
+        if return_weights:
+            return (rgb_out, dolp_out), tuple(weights)
+        return rgb_out, dolp_out
+
+
 class _DualVisualStage(nn.Module):
     """Shared RGB/DoLP stems and ConvNeXt blocks for PIM and FAM stages.
 
@@ -248,6 +330,18 @@ class PZDualPIMStage(_DualVisualStage):
     def __init__(self, c_in: int, c_out: int, stride: int = 2, depth: int = 1):
         super().__init__(c_in, c_out, stride, depth)
         self.pim = _WaveletPIM(c_out // 2)
+
+    def forward(self, x):
+        rgb, dolp = self.pim(*self._features(x))
+        return torch.cat((rgb, dolp), dim=1)
+
+
+class PZDualWTStage(_DualVisualStage):
+    """Dual ConvNeXt visual stage using ``pim_dualWT`` instead of legacy PIM."""
+
+    def __init__(self, c_in: int, c_out: int, stride: int = 2, depth: int = 1):
+        super().__init__(c_in, c_out, stride, depth)
+        self.pim = pim_dualWT(c_out // 2)
 
     def forward(self, x):
         rgb, dolp = self.pim(*self._features(x))

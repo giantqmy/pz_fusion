@@ -1,10 +1,7 @@
-"""Train the RGB/color-DoLP PZ7 model on RGB-P Car."""
+"""Train the RGB/color-DoLP PZ7 dual-wavelet model on prepared RGB-P Car data."""
 
-import json
+import os
 from pathlib import Path
-
-import cv2
-import numpy as np
 
 from train_yolo26_pz7_pim_saffconcat_hmoe_joint_no_depth import PZ7NoDepthTrainer
 from train_yolo26_pz5 import get_parser, main
@@ -16,89 +13,59 @@ DATASET_CANDIDATES = (
 )
 
 
+def validate_prepared_dataset(dataset):
+    """Validate existing paired YOLO data without creating or rewriting files."""
+    train_list = dataset / "train.txt"
+    test_list = dataset / "test.txt"
+    dolp_root = dataset / "images" / "rgb_dolp"
+    if not train_list.is_file() or not test_list.is_file() or not dolp_root.is_dir():
+        raise FileNotFoundError(
+            f"Prepared RGB-P Car data is incomplete under {dataset}; expected train.txt, test.txt, "
+            "and images/rgb_dolp/. No data was generated."
+        )
+
+    entries = [line.strip() for line in train_list.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not entries:
+        raise ValueError(f"Prepared training list is empty: {train_list}")
+    for entry in entries:
+        image = Path(entry)
+        if not image.is_absolute():
+            image = dataset / image
+        rgb = image.with_name(f"{image.stem}_S0_rgb.png")
+        dolp = dolp_root / f"{image.stem}_dolp_color_rgb.png"
+        image_parts = list(image.parts)
+        if "images" not in image_parts:
+            raise ValueError(f"Prepared image path must contain an images directory: {image}")
+        image_parts[image_parts.index("images")] = "labels"
+        label = Path(*image_parts).with_suffix(".txt")
+        if not image.is_file() or not rgb.is_file() or not dolp.is_file() or not label.is_file():
+            raise FileNotFoundError(f"Missing prepared RGB/DoLP image or label: {image}, {rgb}, {dolp}, {label}")
+
+
 def resolve_dataset():
-    """Select the server dataset path, falling back to the local copy."""
-    for path in DATASET_CANDIDATES:
-        if (path / "train" / "annotations.json").is_file() and (path / "test" / "annotations.json").is_file():
+    """Find a previously prepared dataset; never fall back to raw source data."""
+    configured = os.environ.get("RGBP_CAR_DATASET")
+    candidates = (Path(configured),) if configured else DATASET_CANDIDATES
+    for path in candidates:
+        if (path / "train.txt").is_file() and (path / "test.txt").is_file():
+            validate_prepared_dataset(path)
             return path
-    locations = ", ".join(str(path) for path in DATASET_CANDIDATES)
-    raise FileNotFoundError(f"RGB-P Car train/test annotations not found at: {locations}")
-
-
-def prepare_dataset(dataset):
-    """Convert RGB-P COCO annotations and color DoLP into paired YOLO inputs."""
-    split_lists = {"train": [], "test": []}
-
-    for split in ("train", "test"):
-        source = dataset / split
-        coco = json.loads((source / "annotations.json").read_text(encoding="utf-8"))
-        categories = {item["id"]: item["name"].lower() for item in coco["categories"]}
-        car_ids = {cid for cid, name in categories.items() if name == "car"}
-        if len(car_ids) != 1:
-            raise ValueError(f"Expected exactly one car category in {split}/annotations.json: {categories}")
-        car_id = next(iter(car_ids))
-        annotations = {}
-        for ann in coco["annotations"]:
-            if ann["category_id"] == car_id:
-                annotations.setdefault(ann["image_id"], []).append(ann["bbox"])
-
-        candidates = []
-        for record in coco["images"]:
-            image_id = record["id"]
-            image_path = source / "images" / record["file_name"]
-            stem = image_path.stem
-            dolp_path = source / "dolp" / f"{stem}_dolp.tiff"
-            label_path = source / "labels" / f"{stem}.txt"
-            if not image_path.is_file() or not dolp_path.is_file():
-                raise FileNotFoundError(f"Missing paired RGB/DoLP input: {image_path}, {dolp_path}")
-            if not label_path.is_file():
-                raise FileNotFoundError(f"Missing label file: {label_path}")
-
-            rgb = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-            dolp = cv2.imread(str(dolp_path), cv2.IMREAD_UNCHANGED)
-            if rgb is None or dolp is None or rgb.shape[:2] != dolp.shape[:2]:
-                raise ValueError(f"Invalid or misaligned RGB/DoLP pair: {image_path}, {dolp_path}")
-            if rgb.shape[1] != record["width"] or rgb.shape[0] != record["height"]:
-                raise ValueError(f"COCO dimensions disagree with image: {image_path}")
-            dolp_gray = cv2.normalize(dolp, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            dolp_color = cv2.applyColorMap(dolp_gray, cv2.COLORMAP_JET)
-            fused_root = dataset / "images" / "rgb_dolp" / split
-            dolp_root = dataset / "images" / "rgb_dolp"
-            label_root = dataset / "labels" / "rgb_dolp" / split
-            fused_root.mkdir(parents=True, exist_ok=True)
-            dolp_root.mkdir(parents=True, exist_ok=True)
-            label_root.mkdir(parents=True, exist_ok=True)
-            fused_stem = f"{split}_{stem}"
-            fused_image = fused_root / f"{fused_stem}.tiff"
-            if not cv2.imwrite(str(fused_image), rgb):
-                raise OSError(f"Failed to write dataset image: {fused_image}")
-            if not cv2.imwrite(str(fused_root / f"{fused_stem}_S0_rgb.png"), rgb):
-                raise OSError(f"Failed to write RGB image: {fused_stem}")
-            if not cv2.imwrite(str(dolp_root / f"{fused_stem}_dolp_color_rgb.png"), dolp_color):
-                raise OSError(f"Failed to write color DoLP image: {fused_stem}")
-            label_lines = []
-            width, height = record["width"], record["height"]
-            for x, y, w, h in annotations.get(image_id, []):
-                label_lines.append(f"0 {(x + w / 2) / width:.8f} {(y + h / 2) / height:.8f} {w / width:.8f} {h / height:.8f}")
-            (label_root / f"{fused_stem}.txt").write_text("\n".join(label_lines), encoding="utf-8")
-            candidates.append(str(fused_image.resolve()))
-
-        split_lists[split] = candidates
-
-    for name, paths in split_lists.items():
-        (dataset / f"{name}.txt").write_text("\n".join(paths), encoding="utf-8")
+    locations = ", ".join(str(path) for path in candidates)
+    raise FileNotFoundError(
+        f"Prepared RGB-P Car files were not found at: {locations}. "
+        "Set RGBP_CAR_DATASET to the prepared dataset root. Raw data will not be converted."
+    )
 
 
 if __name__ == "__main__":
     dataset = resolve_dataset()
-    prepare_dataset(dataset)
     parser = get_parser()
     model_path = ROOT / "ultralytics/cfg/models/26/yolo26-pz7-pim-saffconcat-no-depth.yaml"
     parser.set_defaults(
         model=model_path,
         data=ROOT / "ultralytics/cfg/datasets/rgb-p-car-rgb-dolp.yaml",
         workers=2,
-        name="yolo26_pz7_rgbp_car_rgb_dolp",
+        name="yolo26_pz7_rgbp_car_dualwt",
         val=False,
     )
     args = parser.parse_args()
@@ -108,14 +75,18 @@ if __name__ == "__main__":
 
     model_config = yaml.safe_load(args.model.read_text(encoding="utf-8"))
     model_config["nc"] = 1
-    dataset_model = ROOT / "runs/rgbp_car/yolo26-pz7-rgbp-car.yaml"
+    for layer in model_config["backbone"]:
+        if layer[2] == "PZDualPIMStage":
+            layer[2] = "PZDualWTStage"
+    dataset_model = ROOT / "runs/rgbp_car/yolo26-pz7-rgbp-car-dualwt.yaml"
     dataset_model.parent.mkdir(parents=True, exist_ok=True)
     dataset_model.write_text(yaml.safe_dump(model_config, sort_keys=False), encoding="utf-8")
     args.model = dataset_model
+
     dataset_yaml = yaml.safe_load(args.data.read_text(encoding="utf-8"))
     dataset_yaml["path"] = str(dataset)
     dataset_yaml["dolp_root"] = str(dataset / "images" / "rgb_dolp")
-    dataset_config = ROOT / "runs/rgbp_car/rgb-p-car-rgb-dolp.yaml"
+    dataset_config = ROOT / "runs/rgbp_car/rgb-p-car-rgb-dolp-prepared.yaml"
     dataset_config.write_text(yaml.safe_dump(dataset_yaml, sort_keys=False), encoding="utf-8")
     args.data = dataset_config
     main(args, trainer_cls=PZ7NoDepthTrainer)
