@@ -42,6 +42,9 @@ def imread(filename: str | Path, flags: int = cv2.IMREAD_COLOR) -> np.ndarray | 
         success, frames = cv2.imdecodemulti(file_bytes, cv2.IMREAD_UNCHANGED)
         if not success:
             return None
+        if flags == cv2.IMREAD_COLOR and len(frames) == 1 and frames[0].ndim == 3 and frames[0].shape[2] == 3:
+            # Match OpenCV's standard RGB loader for uint16 color TIFFs while retaining special-channel TIFF support.
+            return cv2.imdecode(file_bytes, flags)
         if len(frames) > 1 or frames[0].ndim == 3:
             return frames[0] if len(frames) == 1 else np.stack(frames, axis=2)
     im = cv2.imdecode(file_bytes, flags)
