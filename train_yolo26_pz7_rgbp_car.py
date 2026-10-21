@@ -60,12 +60,12 @@ def resolve_dataset():
 if __name__ == "__main__":
     dataset = resolve_dataset()
     parser = get_parser()
-    model_path = ROOT / "ultralytics/cfg/models/26/yolo26-pz7-pim-saffconcat-no-depth.yaml"
+    model_path = ROOT / "ultralytics/cfg/models/26/yolo26l-pz7-pim-saffconcat-no-depth.yaml"
     parser.set_defaults(
         model=model_path,
         data=ROOT / "ultralytics/cfg/datasets/rgb-p-car-rgb-dolp.yaml",
         workers=2,
-        name="yolo26_pz7_rgbp_car_dualwt",
+        name="yolo26l_pz7_rgbp_car_dualwt",
         val=False,
     )
     args = parser.parse_args()
@@ -78,7 +78,7 @@ if __name__ == "__main__":
     for layer in model_config["backbone"]:
         if layer[2] == "PZDualPIMStage":
             layer[2] = "PZDualWTStage"
-    dataset_model = ROOT / "runs/rgbp_car/yolo26-pz7-rgbp-car-dualwt.yaml"
+    dataset_model = ROOT / "runs/rgbp_car/yolo26l-pz7-rgbp-car-dualwt.yaml"
     dataset_model.parent.mkdir(parents=True, exist_ok=True)
     dataset_model.write_text(yaml.safe_dump(model_config, sort_keys=False), encoding="utf-8")
     args.model = dataset_model
