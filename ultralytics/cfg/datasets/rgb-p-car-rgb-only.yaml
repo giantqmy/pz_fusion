@@ -1,6 +1,8 @@
 # RGB-P Car RGB-only baseline using the existing YOLO labels.
 path: /media/ddc/新加卷/hys/qmy/pz/RGB-P Car
-train: train/images
-val: test/images
+train: train.txt
+val: test.txt
+channels: 3
+rgb_s0: true
 names:
   0: Car
