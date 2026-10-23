@@ -348,6 +348,100 @@ class PZDualWTStage(_DualVisualStage):
         return torch.cat((rgb, dolp), dim=1)
 
 
+class _CBS(nn.Sequential):
+    """Conv-BN-SiLU block used by the edge-aware wavelet PIM."""
+
+    def __init__(self, c1, c2):
+        super().__init__(nn.Conv2d(c1, c2, 3, padding=1, bias=False), nn.BatchNorm2d(c2), nn.SiLU(inplace=True))
+
+
+class _SobelLaplaceEdge(nn.Module):
+    """Fixed per-channel Sobel and Laplacian responses followed by a CBS mixer."""
+
+    def __init__(self, channels):
+        super().__init__()
+        kernels = torch.tensor(
+            [
+                [[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]],
+                [[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]],
+                [[0.0, 1.0, 0.0], [1.0, -4.0, 1.0], [0.0, 1.0, 0.0]],
+            ],
+            dtype=torch.float32,
+        )
+        self.register_buffer("kernels", kernels[:, None].repeat(channels, 1, 1, 1))
+        self.channels = channels
+        self.mix = _CBS(channels * 3, channels * 3)
+
+    def forward(self, x):
+        responses = F.conv2d(x, self.kernels.to(dtype=x.dtype), padding=1, groups=self.channels)
+        return self.mix(responses.abs())
+
+
+class _DualWaveletDifferenceGate(nn.Module):
+    """Difference-guided CBAM residual gate shared across the two modalities."""
+
+    def __init__(self, channels):
+        super().__init__()
+        from .conv import CBAM
+
+        self.cbam = CBAM(channels)
+
+    def forward(self, rgb, dolp):
+        gate = self.cbam((rgb - dolp).abs()).sigmoid()
+        return rgb + rgb * gate, dolp + dolp * gate
+
+
+class _WaveletEdgeCBAMPIM(nn.Module):
+    """Band-wise modality-difference fusion with a DoLP high-frequency edge path."""
+
+    def __init__(self, channels):
+        super().__init__()
+        self.channels = channels
+        self.dwt = _HaarDWT(channels)
+        self.idwt = _HaarIDWT(channels)
+        self.rgb_high = _CBS(channels * 3, channels * 3)
+        self.dolp_high = _CBS(channels * 3, channels * 3)
+        self.dolp_edge = _SobelLaplaceEdge(channels)
+        self.rgb_low = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.dolp_low = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.high_gate = _DualWaveletDifferenceGate(channels * 3)
+        self.low_gate = _DualWaveletDifferenceGate(channels)
+
+    def _bands(self, x):
+        low, high = self.dwt(x)
+        return low, high
+
+    def forward(self, rgb, dolp):
+        size = rgb.shape[-2:]
+        rgb_low, rgb_high = self._bands(rgb)
+        dolp_low, dolp_high = self._bands(dolp)
+
+        rgb_high = self.rgb_high(rgb_high)
+        dolp_high = self.dolp_high(dolp_high)
+        dolp_high = dolp_high + self.dolp_edge(dolp_high)
+        rgb_low = self.rgb_low(rgb_low)
+        dolp_low = self.dolp_low(dolp_low)
+
+        rgb_high, dolp_high = self.high_gate(rgb_high, dolp_high)
+        rgb_low, dolp_low = self.low_gate(rgb_low, dolp_low)
+
+        rgb_out = self.idwt(rgb_low, *rgb_high.chunk(3, dim=1), output_size=size)
+        dolp_out = self.idwt(dolp_low, *dolp_high.chunk(3, dim=1), output_size=size)
+        return rgb_out, dolp_out
+
+
+class PZDualEdgeWTStage(_DualVisualStage):
+    """Dual ConvNeXt stage with Sobel/Laplacian and CBAM-gated wavelet fusion."""
+
+    def __init__(self, c_in: int, c_out: int, stride: int = 2, depth: int = 1):
+        super().__init__(c_in, c_out, stride, depth)
+        self.pim = _WaveletEdgeCBAMPIM(c_out // 2)
+
+    def forward(self, x):
+        rgb, dolp = self.pim(*self._features(x))
+        return torch.cat((rgb, dolp), dim=1)
+
+
 class PZConvNeXtPIMStage(PZDualPIMStage):
     """Extract dual visual features with ConvNeXt stems/downsampling before wavelet PIM.
 
