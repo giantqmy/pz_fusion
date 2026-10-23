@@ -368,9 +368,10 @@ class _SobelLaplaceEdge(nn.Module):
             ],
             dtype=torch.float32,
         )
-        self.register_buffer("kernels", kernels[:, None].repeat(channels, 1, 1, 1))
-        self.channels = channels
-        self.mix = _CBS(channels * 3, channels * 3)
+        high_channels = channels * 3
+        self.register_buffer("kernels", kernels[:, None].repeat(high_channels, 1, 1, 1))
+        self.channels = high_channels
+        self.mix = _CBS(high_channels * 3, high_channels)
 
     def forward(self, x):
         responses = F.conv2d(x, self.kernels.to(dtype=x.dtype), padding=1, groups=self.channels)
