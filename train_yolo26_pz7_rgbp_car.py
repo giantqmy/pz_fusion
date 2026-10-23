@@ -65,7 +65,7 @@ if __name__ == "__main__":
         model=model_path,
         data=ROOT / "ultralytics/cfg/datasets/rgb-p-car-rgb-dolp.yaml",
         workers=2,
-        name="yolo26_pz7_rgbp_car_edgecbam_wt",
+        name="yolo26l_pz7_rgbp_car_edgecbam_wt",
         val=False,
     )
     args = parser.parse_args()
@@ -78,7 +78,7 @@ if __name__ == "__main__":
     for layer in model_config["backbone"]:
         if layer[2] == "PZDualPIMStage":
             layer[2] = "PZDualWTStage"
-    dataset_model = ROOT / "runs/rgbp_car/yolo26-pz7-rgbp-car-edgecbam-wt.yaml"
+    dataset_model = ROOT / "runs/rgbp_car/yolo26l-pz7-rgbp-car-edgecbam-wt.yaml"
     dataset_model.parent.mkdir(parents=True, exist_ok=True)
     dataset_model.write_text(yaml.safe_dump(model_config, sort_keys=False), encoding="utf-8")
     args.model = dataset_model
