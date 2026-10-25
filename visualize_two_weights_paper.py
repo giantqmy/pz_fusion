@@ -1,8 +1,8 @@
-"""Save paper-ready ground-truth and two-model detection visualizations.
+"""Save Ultralytics-style ground-truth and two-model detection visualizations.
 
-The two weights are ordered as ``NODEPTH DEPTH``. Images contain only colored
-bounding boxes; all model names, class names and confidence values are written
-to ``predictions.json`` instead of being drawn on the figures.
+The two weights are ordered as ``NODEPTH DEPTH``. Bounding boxes are rendered
+through :class:`ultralytics.engine.results.Results`, so class colors, labels,
+and confidence formatting match the official Ultralytics visualization.
 
 Example:
     python visualize_two_weights_paper.py \
@@ -22,6 +22,7 @@ import torch
 from ultralytics import YOLO
 from ultralytics.data.augment import LetterBox
 from ultralytics.data.utils import img2label_paths
+from ultralytics.engine.results import Results
 from ultralytics.utils import YAML, ops
 from ultralytics.utils.nms import non_max_suppression
 from ultralytics.utils.torch_utils import select_device
@@ -29,9 +30,6 @@ from ultralytics.utils.torch_utils import select_device
 ROOT = Path(__file__).resolve().parent
 IMAGE_SUFFIXES = {".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 AUX_SUFFIXES = ("_s0_rgb", "_s0_nir", "_dolp_rgb", "_dolp_nir", "_aolp_rgb", "_aolp_nir", "_depth")
-GT_COLOR = (40, 210, 80)       # BGR
-NODEPTH_COLOR = (220, 90, 40)  # BGR
-DEPTH_COLOR = (50, 70, 230)    # BGR
 
 
 def parse_args():
@@ -188,10 +186,7 @@ def infer(model, image, data, args, device):
         # Ultralytics returns inference tensors here; scale_boxes updates its input in-place.
         detections = detections.clone()
         detections[:, :4] = ops.scale_boxes(tensor.shape[2:], detections[:, :4], image.shape[:2])
-    return [
-        {"class_id": int(row[5]), "confidence": float(row[4]), "xyxy": [float(v) for v in row[:4]]}
-        for row in detections.cpu().tolist()
-    ]
+    return detections.detach().cpu()
 
 
 def label_boxes(image_path, image_shape, labels_dir):
@@ -210,11 +205,36 @@ def label_boxes(image_path, image_shape, labels_dir):
     return boxes
 
 
-def draw_boxes(canvas, boxes, color, width):
-    for box in boxes:
-        xyxy = box[1] if isinstance(box, tuple) else box["xyxy"]
-        x1, y1, x2, y2 = (round(float(v)) for v in xyxy)
-        cv2.rectangle(canvas, (x1, y1), (x2, y2), color, width, cv2.LINE_AA)
+def names_dict(names):
+    """Normalize model class names to the mapping expected by ``Results``."""
+    return dict(enumerate(names)) if isinstance(names, (list, tuple)) else {int(k): str(v) for k, v in names.items()}
+
+
+def plot_results(image, boxes, names, line_width, show_conf):
+    """Use the official Ultralytics renderer for class colors and box labels."""
+    result = Results(image, path="", names=names, boxes=boxes)
+    return result.plot(
+        conf=show_conf,
+        line_width=line_width,
+        labels=True,
+        boxes=True,
+        masks=False,
+        probs=False,
+        color_mode="class",
+    )
+
+
+def prediction_records(detections, names):
+    """Convert native detection rows to JSON-serializable records."""
+    return [
+        {
+            "class_id": int(row[5]),
+            "class_name": names[int(row[5])],
+            "confidence": float(row[4]),
+            "xyxy": [float(v) for v in row[:4]],
+        }
+        for row in detections.tolist()
+    ]
 
 
 def save_image(path, image):
@@ -241,6 +261,7 @@ def main(args):
         raise ValueError(f"Expected different no-depth/depth input channels, got {channels}")
     for model in models:
         model.model.to(device).eval()
+    names = names_dict(models[0].names)
 
     records = []
     for index, image_path in enumerate(images, 1):
@@ -248,22 +269,26 @@ def main(args):
                   for channel in channels]
         rgb_bgr = cv2.cvtColor(loaded[0][..., :3].astype(np.uint8), cv2.COLOR_RGB2BGR)
         truth = label_boxes(image_path, rgb_bgr.shape, args.labels_dir)
-        gt_canvas = rgb_bgr.copy()
-        draw_boxes(gt_canvas, truth, GT_COLOR, args.box_width)
+        truth_tensor = torch.tensor(
+            [[*box, 1.0, class_id] for class_id, box in truth], dtype=torch.float32
+        ) if truth else torch.empty((0, 6), dtype=torch.float32)
+        gt_canvas = plot_results(rgb_bgr, truth_tensor, names, args.box_width, show_conf=False)
         nodepth_detections = infer(models[0], loaded[0], data, args, device)
         depth_detections = infer(models[1], loaded[1], data, args, device)
-        nodepth_canvas = rgb_bgr.copy()
-        depth_canvas = rgb_bgr.copy()
-        draw_boxes(nodepth_canvas, nodepth_detections, NODEPTH_COLOR, args.box_width)
-        draw_boxes(depth_canvas, depth_detections, DEPTH_COLOR, args.box_width)
+        nodepth_canvas = plot_results(rgb_bgr, nodepth_detections, names, args.box_width, show_conf=True)
+        depth_canvas = plot_results(rgb_bgr, depth_detections, names, args.box_width, show_conf=True)
 
         name = f"{index:06d}_{image_path.stem}.png"
         save_image(output / "ground_truth" / name, gt_canvas)
         save_image(output / "nodepth" / name, nodepth_canvas)
         save_image(output / "depth" / name, depth_canvas)
         save_image(output / "triptych" / name, np.concatenate((gt_canvas, nodepth_canvas, depth_canvas), axis=1))
-        records.append({"image": str(image_path), "ground_truth": truth,
-                        "nodepth": nodepth_detections, "depth": depth_detections})
+        records.append({
+            "image": str(image_path),
+            "ground_truth": [{"class_id": class_id, "xyxy": list(box)} for class_id, box in truth],
+            "nodepth": prediction_records(nodepth_detections, names),
+            "depth": prediction_records(depth_detections, names),
+        })
         print(f"[{index}/{len(images)}] {name}")
 
     output.mkdir(parents=True, exist_ok=True)
