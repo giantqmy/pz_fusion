@@ -192,11 +192,11 @@ def infer(model, image, data, args, device):
     ]
 
 
-def label_boxes(image, labels_dir):
-    label = labels_dir / f"{image.stem}.txt" if labels_dir else Path(img2label_paths([str(image)])[0])
+def label_boxes(image_path, image_shape, labels_dir):
+    label = labels_dir / f"{image_path.stem}.txt" if labels_dir else Path(img2label_paths([str(image_path)])[0])
     if not label.is_file():
         raise FileNotFoundError(f"Missing ground-truth label: {label}")
-    height, width = image.shape[:2]
+    height, width = image_shape[:2]
     boxes = []
     for line in label.read_text(encoding="utf-8-sig").splitlines():
         values = line.split()
@@ -245,7 +245,7 @@ def main(args):
         loaded = [load_modalities(image_path, data, channel, data_file, args.dolp_root, args.depth_root)
                   for channel in channels]
         rgb_bgr = cv2.cvtColor(loaded[0][..., :3].astype(np.uint8), cv2.COLOR_RGB2BGR)
-        truth = label_boxes(image_path, args.labels_dir)
+        truth = label_boxes(image_path, rgb_bgr.shape, args.labels_dir)
         gt_canvas = rgb_bgr.copy()
         draw_boxes(gt_canvas, truth, GT_COLOR, args.box_width)
         nodepth_detections = infer(models[0], loaded[0], data, args, device)
