@@ -185,6 +185,8 @@ def infer(model, image, data, args, device):
         head = model.model.model[-1]
         detections = non_max_suppression(raw, args.conf, args.iou, end2end=getattr(head, "end2end", False))[0]
     if len(detections):
+        # Ultralytics returns inference tensors here; scale_boxes updates its input in-place.
+        detections = detections.clone()
         detections[:, :4] = ops.scale_boxes(tensor.shape[2:], detections[:, :4], image.shape[:2])
     return [
         {"class_id": int(row[5]), "confidence": float(row[4]), "xyxy": [float(v) for v in row[:4]]}
