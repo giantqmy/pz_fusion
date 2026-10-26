@@ -13,6 +13,7 @@ Example:
 
 import argparse
 import json
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -52,6 +53,8 @@ def parse_args():
     parser.add_argument("--iou", type=float, default=0.7)
     parser.add_argument("--max-images", type=int, default=0, help="0 means all images")
     parser.add_argument("--box-width", type=int, default=3)
+    parser.add_argument("--val-batch", type=int, default=4, help="Batch size for per-model validation")
+    parser.add_argument("--workers", type=int, default=2, help="Data-loader workers for validation")
     return parser.parse_args()
 
 
@@ -257,6 +260,65 @@ def save_image(path, image):
         raise OSError(f"Failed to save image: {path}")
 
 
+def validation_data(data, channels, modality):
+    """Build the modality-specific dataset configuration expected by PZ7 val."""
+    config = dict(data)
+    config["channels"] = channels
+    config["ch"] = channels
+    config["rgb_s0"] = modality == "rgb_s0"
+    config["rgb_dolp"] = modality == "rgb_dolp"
+    config["rgb_dolp_depth"] = modality == "rgb_dolp_depth"
+    return config
+
+
+def validate_models(models, names, data, args, output, device):
+    """Run Ultralytics validation independently for RGB, visual-only, and depth models."""
+    from train_yolo26_pz5 import PZ5Validator
+
+    specs = (
+        ("official_yolo26n", models[0], 3, "rgb_s0", None),
+        ("nodepth", models[1], model_channels(models[1]), "rgb_dolp", PZ5Validator),
+        ("depth", models[2], model_channels(models[2]), "rgb_dolp_depth", PZ5Validator),
+    )
+    metrics_by_model = {}
+    validation_root = output / "validation"
+    validation_root.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="pz7_val_data_") as temp_dir:
+        for name, model, channels, modality, validator in specs:
+            config = validation_data(data, channels, modality)
+            data_yaml = Path(temp_dir) / f"{name}.yaml"
+            YAML.save(data_yaml, config)
+            for other in models:
+                other.model.to("cpu")
+            model.model.to(device).eval()
+            val_kwargs = {
+                "data": str(data_yaml),
+                "split": args.split,
+                "imgsz": args.imgsz,
+                "batch": args.val_batch,
+                "workers": args.workers,
+                "device": args.device,
+                "project": str(validation_root),
+                "name": name,
+                "exist_ok": True,
+                "plots": False,
+                "save_json": False,
+                "verbose": False,
+            }
+            if validator is not None:
+                val_kwargs["validator"] = validator
+            result = model.val(**val_kwargs)
+            metrics_by_model[name] = {key: float(value) for key, value in result.results_dict.items()}
+            print(f"val/{name}: {json.dumps(metrics_by_model[name], ensure_ascii=False)}")
+            model.model.to("cpu")
+
+    metrics_file = output / "validation_metrics.json"
+    metrics_file.write_text(json.dumps(metrics_by_model, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"Saved validation metrics to {metrics_file}")
+    return metrics_by_model
+
+
 def main(args):
     weights = [p.expanduser().resolve() for p in args.weights]
     official_weight = args.official_weight.expanduser().resolve()
@@ -266,6 +328,9 @@ def main(args):
         if not path.is_file():
             raise FileNotFoundError(path)
     data = YAML.load(data_file)
+    data["path"] = str(resolve_path(data.get("path", "."), data_file.parent))
+    if data.get("dolp_root"):
+        data["dolp_root"] = str(resolve_path(data["dolp_root"], data_file.parent))
     images = source_images(data, args.split, data_file)
     if args.max_images > 0:
         images = images[:args.max_images]
@@ -325,6 +390,7 @@ def main(args):
     (output / "predictions.json").write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Validation complete: {len(records)} samples")
     print(f"Saved visualizations and predictions.json to {output}")
+    validate_models(models, names, data, args, output, device)
 
 
 if __name__ == "__main__":
