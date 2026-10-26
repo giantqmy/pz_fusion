@@ -189,7 +189,64 @@ def _save_channel_contact_sheet(
     sheet.save(path)
 
 
-def _save_paper_views(features: dict[str, Any], directory: Path, block_size: int, cmap_name: str):
+def _save_saff_effect(before: Any, after: Any, rgb: np.ndarray, directory: Path, cmap_name: str):
+    """Compare spatial mean-absolute responses, without pairing mixed output channels."""
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    before_array, after_array = _feature_array(before), _feature_array(after)
+    if before_array.shape[-2:] != after_array.shape[-2:]:
+        raise ValueError("SAFF before/after spatial sizes must match")
+    before_response = np.abs(before_array).mean(axis=0)
+    after_response = np.abs(after_array).mean(axis=0)
+    change = after_response - before_response
+    # One raw-value scale for both panels: do not independently brighten either map.
+    vmax = max(float(before_response.max()), float(after_response.max()), 1e-6)
+    change_limit = max(float(np.abs(change).max()), 1e-6)
+
+    figure = Figure(figsize=(16, 4.2), layout="constrained")
+    FigureCanvasAgg(figure)
+    axes = figure.subplots(1, 4)
+    axes[0].imshow(np.clip(rgb, 0, 255).astype(np.uint8))
+    axes[0].set_title("RGB reference")
+    axes[1].imshow(before_response, cmap=cmap_name, vmin=0, vmax=vmax, interpolation="nearest")
+    axes[1].set_title("Before SAFF")
+    response_plot = axes[2].imshow(
+        after_response, cmap=cmap_name, vmin=0, vmax=vmax, interpolation="nearest"
+    )
+    axes[2].set_title("After SAFF + output projection")
+    figure.colorbar(response_plot, ax=list(axes[1:3]), shrink=0.75, label="Mean absolute activation")
+    change_plot = axes[3].imshow(
+        change, cmap="RdBu_r", vmin=-change_limit, vmax=change_limit, interpolation="nearest"
+    )
+    axes[3].set_title("Response change (after - before)")
+    figure.colorbar(change_plot, ax=axes[3], shrink=0.75, label="Decrease / increase")
+    for axis in axes:
+        axis.set_axis_off()
+    directory.mkdir(parents=True, exist_ok=True)
+    figure.savefig(directory / "p2_saff_effect.png", dpi=200)
+    figure.clear()
+    # Keep raw responses for quantitative inspection, without losing scale information to RGB rendering.
+    np.savez_compressed(
+        directory / "p2_saff_responses.npz",
+        before=before_response, after=after_response, change=change,
+    )
+    (directory / "p2_saff_effect.txt").write_text(
+        "Before: concatenated RGB/DoLP state entering PZSAFFConcatLateral (after PIM).\n"
+        "After: PZSAFFConcatLateral output, including 1x1 Conv + BN + SiLU.\n"
+        "Response: mean(abs(feature), channel axis), using every channel.\n"
+        "Before/after share vmin=0 and vmax=max(before.max(), after.max()).\n"
+        "Change: after response minus before response; red=increase, blue=decrease.\n"
+        "These maps describe activation distribution, not class importance or detection accuracy.\n"
+        f"before mean={before_response.mean():.6g}, max={before_response.max():.6g}\n"
+        f"after mean={after_response.mean():.6g}, max={after_response.max():.6g}\n",
+        encoding="utf-8",
+    )
+
+
+def _save_paper_views(
+    features: dict[str, Any], directory: Path, block_size: int, cmap_name: str, rgb: np.ndarray | None = None,
+):
     """Save P2 PIM before/after modality comparisons and SAFF output."""
     levels = ("p2",)
     for level in levels:
@@ -212,6 +269,9 @@ def _save_paper_views(features: dict[str, Any], directory: Path, block_size: int
                 saff, directory / f"{level}_saff_fused.png", block_size, cmap_name,
                 title=f"{level.upper()} SAFFConcat fused",
             )
+            saff_input = features.get(f"saff/{level}/before_fusion")
+            if saff_input is not None and rgb is not None:
+                _save_saff_effect(saff_input, saff, rgb, directory, cmap_name)
 
 
 def _save_inputs(image: np.ndarray, directory: Path, cmap_name: str):
@@ -246,13 +306,17 @@ class FeatureRecorder:
     def _attach(self, model):
         layers = getattr(model, "model", model)
         layers = getattr(layers, "model", layers)
-        stage_numbers = {"PZDualPIMStage": 0, "PZSAFFConcatLateral": 0, "PZHMoEJointFusion": 0}
+        stage_numbers = {"pim": 0, "PZSAFFConcatLateral": 0, "PZHMoEJointFusion": 0}
+        pim_stage_types = {"PZDualPIMStage", "PZDualEdgeWTStage", "PZDualEdgeWTZeroStage"}
         pyramid_levels = ("p2", "p3", "p4", "p5")
         for index, module in enumerate(layers):
             name = module.__class__.__name__
-            if name == "PZDualPIMStage":
-                level = pyramid_levels[stage_numbers[name]]
-                stage_numbers[name] += 1
+            if name in pim_stage_types:
+                stage_index = stage_numbers["pim"]
+                if stage_index >= len(pyramid_levels):
+                    raise ValueError(f"Found more than {len(pyramid_levels)} PIM stages")
+                level = pyramid_levels[stage_index]
+                stage_numbers["pim"] += 1
                 self.handles.extend(
                     [
                         module.branch1.register_forward_hook(
@@ -274,6 +338,9 @@ class FeatureRecorder:
                 stage_numbers[name] += 1
                 self.handles.extend(
                     [
+                        module.register_forward_pre_hook(
+                            lambda _m, inputs, n=f"saff/{level}/before_fusion": self._put(n, inputs[0])
+                        ),
                         module.saff.register_forward_hook(
                             lambda _m, _i, out, n=f"saff/{level}/after_saff_branches": self._put(n, out)
                         ),
@@ -369,7 +436,7 @@ def main(args):
             args.max_channels,
         )
     paper_dir = output / "paper"
-    _save_paper_views(recorder.features, paper_dir, args.block_size, args.cmap)
+    _save_paper_views(recorder.features, paper_dir, args.block_size, args.cmap, rgb=raw[..., :3])
     print(f"Saved {len(recorder.features)} feature groups to: {output}")
     print(f"Saved PIM/SAFF all-channel comparison sheets to: {paper_dir}")
 

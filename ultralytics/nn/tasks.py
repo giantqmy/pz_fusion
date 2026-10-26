@@ -80,6 +80,7 @@ from ultralytics.nn.modules import (
     PZDualPIMStage,
     PZDualWTStage,
     PZDualEdgeWTStage,
+    PZDualEdgeWTZeroStage,
     PZConvNeXtPIMStage,
     PZDualFAMStage,
     PZSAFFLateral,
@@ -2145,7 +2146,7 @@ def parse_model(d, ch, verbose=True):
         elif m is FusePol:
             c1, c2 = ch[f], 6
             args = [c1, c2]
-        elif m in {PZPIMStage, PZDualPIMStage, PZDualWTStage, PZDualEdgeWTStage, PZConvNeXtPIMStage, PZDualFAMStage}:
+        elif m in {PZPIMStage, PZDualPIMStage, PZDualWTStage, PZDualEdgeWTStage, PZDualEdgeWTZeroStage, PZConvNeXtPIMStage, PZDualFAMStage}:
             c1, c2 = ch[f], args[0]
             c2 = make_divisible(min(c2, max_channels) * width, 8)
             args = [c1, c2, *args[1:]]

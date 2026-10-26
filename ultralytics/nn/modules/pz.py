@@ -395,7 +395,7 @@ class _DualWaveletDifferenceGate(nn.Module):
 class _WaveletEdgeCBAMPIM(nn.Module):
     """Band-wise modality-difference fusion with a DoLP high-frequency edge path."""
 
-    def __init__(self, channels):
+    def __init__(self, channels, edge_init=1.0):
         super().__init__()
         self.channels = channels
         self.dwt = _HaarDWT(channels)
@@ -403,6 +403,7 @@ class _WaveletEdgeCBAMPIM(nn.Module):
         self.rgb_high = _CBS(channels * 3, channels * 3)
         self.dolp_high = _CBS(channels * 3, channels * 3)
         self.dolp_edge = _SobelLaplaceEdge(channels)
+        self.edge_gain = nn.Parameter(torch.tensor(float(edge_init)))
         self.rgb_low = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
         self.dolp_low = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
         self.high_gate = _DualWaveletDifferenceGate(channels * 3)
@@ -419,7 +420,7 @@ class _WaveletEdgeCBAMPIM(nn.Module):
 
         rgb_high = self.rgb_high(rgb_high)
         dolp_high = self.dolp_high(dolp_high)
-        dolp_high = dolp_high + self.dolp_edge(dolp_high)
+        dolp_high = dolp_high + self.edge_gain * self.dolp_edge(dolp_high)
         rgb_low = self.rgb_low(rgb_low)
         dolp_low = self.dolp_low(dolp_low)
 
@@ -437,6 +438,18 @@ class PZDualEdgeWTStage(_DualVisualStage):
     def __init__(self, c_in: int, c_out: int, stride: int = 2, depth: int = 1):
         super().__init__(c_in, c_out, stride, depth)
         self.pim = _WaveletEdgeCBAMPIM(c_out // 2)
+
+    def forward(self, x):
+        rgb, dolp = self.pim(*self._features(x))
+        return torch.cat((rgb, dolp), dim=1)
+
+
+class PZDualEdgeWTZeroStage(_DualVisualStage):
+    """Edge-CBAM wavelet stage with a zero-initialized learnable edge residual."""
+
+    def __init__(self, c_in: int, c_out: int, stride: int = 2, depth: int = 1, edge_init: float = 0.0):
+        super().__init__(c_in, c_out, stride, depth)
+        self.pim = _WaveletEdgeCBAMPIM(c_out // 2, edge_init=edge_init)
 
     def forward(self, x):
         rgb, dolp = self.pim(*self._features(x))
