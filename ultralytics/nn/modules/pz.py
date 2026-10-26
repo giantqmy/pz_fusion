@@ -388,7 +388,8 @@ class _DualWaveletDifferenceGate(nn.Module):
         self.cbam = CBAM(channels)
 
     def forward(self, rgb, dolp):
-        gate = self.cbam((rgb - dolp).abs()).sigmoid()
+        # CBAM already returns a sigmoid-bounded attention map.
+        gate = self.cbam((rgb - dolp).abs())
         return rgb + rgb * gate, dolp + dolp * gate
 
 
