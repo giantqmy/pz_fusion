@@ -115,6 +115,105 @@ def _save_feature_map(feature: Any, directory: Path, block_size: int, cmap_name:
     )
 
 
+def _feature_array(feature: Any) -> np.ndarray:
+    """Convert a captured BCHW/CHW tensor to a finite CHW NumPy array."""
+    if hasattr(feature, "detach"):
+        feature = feature.detach().float().cpu().numpy()
+    array = np.asarray(feature)
+    if array.ndim == 4:
+        array = array[0]
+    if array.ndim != 3:
+        raise ValueError(f"Expected CHW/BCHW feature map, got {array.shape}")
+    return np.nan_to_num(array, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def _colorize_channel(channel: np.ndarray, cmap, low=None, high=None) -> np.ndarray:
+    low = float(channel.min()) if low is None else low
+    high = float(channel.max()) if high is None else high
+    normalized = np.clip((channel - low) / (high - low + 1e-6), 0, 1)
+    return (cmap(normalized)[..., :3] * 255).astype(np.uint8)
+
+
+def _save_channel_contact_sheet(
+    feature: Any,
+    path: Path,
+    block_size: int,
+    cmap_name: str,
+    comparison: Any | None = None,
+    title: str = "",
+):
+    """Tile every channel into one readable sheet; comparisons share per-channel scaling."""
+    from PIL import Image, ImageDraw
+    from matplotlib import cm
+
+    arrays = [_feature_array(feature)]
+    if comparison is not None:
+        arrays.append(_feature_array(comparison))
+    if any(array.shape != arrays[0].shape for array in arrays[1:]):
+        raise ValueError(f"Cannot compare feature maps with different shapes: {[a.shape for a in arrays]}")
+
+    channels, height, width = arrays[0].shape
+    columns = int(np.ceil(np.sqrt(channels)))
+    rows = int(np.ceil(channels / columns))
+    cell_w, cell_h = width * block_size, height * block_size
+    gap, header_h, row_label_w = 3, 22, 58 if comparison is not None else 0
+    sheet_w = row_label_w + columns * cell_w + (columns + 1) * gap
+    sheet_h = header_h + len(arrays) * (rows * cell_h + (rows + 1) * gap)
+    sheet = Image.new("RGB", (sheet_w, sheet_h), (245, 245, 245))
+    draw = ImageDraw.Draw(sheet)
+    if title:
+        draw.text((gap, 4), f"{title} | C={channels}, HxW={height}x{width}", fill=(20, 20, 20))
+    cmap = cm.get_cmap(cmap_name)
+
+    for row_index, array in enumerate(arrays):
+        row_top = header_h + row_index * (rows * cell_h + (rows + 1) * gap)
+        if comparison is not None:
+            row_name = "Before" if row_index == 0 else "After"
+            draw.text((gap, row_top + 4), row_name, fill=(20, 20, 20))
+        for channel_index in range(channels):
+            grid_y, grid_x = divmod(channel_index, columns)
+            x = row_label_w + gap + grid_x * cell_w
+            y = row_top + gap + grid_y * cell_h
+            if comparison is not None:
+                joint = np.concatenate([item[channel_index].ravel() for item in arrays])
+                low, high = float(joint.min()), float(joint.max())
+                color = _colorize_channel(array[channel_index], cmap, low, high)
+            else:
+                color = _colorize_channel(array[channel_index], cmap)
+            tile = Image.fromarray(color).resize((cell_w, cell_h), Image.Resampling.NEAREST)
+            sheet.paste(tile, (x, y))
+            draw.text((x + 2, y + 2), str(channel_index), fill=(255, 255, 255), stroke_width=1,
+                      stroke_fill=(0, 0, 0))
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(path)
+
+
+def _save_paper_views(features: dict[str, Any], directory: Path, block_size: int, cmap_name: str):
+    """Save P2 PIM before/after modality comparisons and SAFF output."""
+    levels = ("p2",)
+    for level in levels:
+        before_rgb = features.get(f"pim/{level}/before_rgb")
+        before_dolp = features.get(f"pim/{level}/before_dolp")
+        after = features.get(f"pim/{level}/after_branches")
+        if before_rgb is not None and before_dolp is not None and isinstance(after, (tuple, list)) and len(after) == 2:
+            _save_channel_contact_sheet(
+                before_rgb, directory / f"{level}_rgb_pim_before_after.png", block_size, cmap_name,
+                comparison=after[0], title=f"{level.upper()} RGB PIM",
+            )
+            _save_channel_contact_sheet(
+                before_dolp, directory / f"{level}_dolp_pim_before_after.png", block_size, cmap_name,
+                comparison=after[1], title=f"{level.upper()} DoLP PIM",
+            )
+
+        saff = features.get(f"saff/{level}/after_single_fuse")
+        if saff is not None:
+            _save_channel_contact_sheet(
+                saff, directory / f"{level}_saff_fused.png", block_size, cmap_name,
+                title=f"{level.upper()} SAFFConcat fused",
+            )
+
+
 def _save_inputs(image: np.ndarray, directory: Path, cmap_name: str):
     """Save RGB, color DoLP, raw depth and a colorized depth preview."""
     from PIL import Image
@@ -269,7 +368,10 @@ def main(args):
             args.cmap,
             args.max_channels,
         )
+    paper_dir = output / "paper"
+    _save_paper_views(recorder.features, paper_dir, args.block_size, args.cmap)
     print(f"Saved {len(recorder.features)} feature groups to: {output}")
+    print(f"Saved PIM/SAFF all-channel comparison sheets to: {paper_dir}")
 
 
 if __name__ == "__main__":
