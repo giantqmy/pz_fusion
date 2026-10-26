@@ -6,6 +6,7 @@ from ultralytics.nn.modules.pz import (
     PZDepthFusion,
     PZDepthStage,
     PZDualEdgeWTStage,
+    PZDualEdgeWTZeroStage,
     PZDualWTStage,
     PZHMoEFusion,
     PZSAFFConcatLateral,
@@ -25,7 +26,7 @@ class PZ7NoDepthTrainer(PZ5Trainer):
         model = super().get_model(cfg=cfg, weights=weights, verbose=verbose)
         stages = (1, 3, 5, 7)
         laterals = (2, 4, 6, 8)
-        visual_stage_types = (PZDualWTStage, PZDualEdgeWTStage)
+        visual_stage_types = (PZDualWTStage, PZDualEdgeWTStage, PZDualEdgeWTZeroStage)
         if tuple(i for i, layer in enumerate(model.model) if isinstance(layer, visual_stage_types)) != stages:
             raise ValueError(f"Expected dual wavelet visual stages at layers {stages}")
         if tuple(i for i, layer in enumerate(model.model) if isinstance(layer, PZSAFFConcatLateral)) != laterals:
