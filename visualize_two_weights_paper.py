@@ -237,6 +237,13 @@ def prediction_records(detections, names):
     ]
 
 
+def terminal_summary(detections, names):
+    """Format detections for the terminal without adding text to saved images."""
+    if not len(detections):
+        return "none"
+    return ", ".join(f"{names[int(row[5])]} {float(row[4]):.2f}" for row in detections.tolist())
+
+
 def save_image(path, image):
     path.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(path), image):
@@ -289,11 +296,18 @@ def main(args):
             "nodepth": prediction_records(nodepth_detections, names),
             "depth": prediction_records(depth_detections, names),
         })
-        print(f"[{index}/{len(images)}] {name}")
+        gt_summary = ", ".join(names.get(class_id, str(class_id)) for class_id, _ in truth) or "none"
+        print(
+            f"[{index}/{len(images)}] {name} | "
+            f"GT={len(truth)} ({gt_summary}) | "
+            f"nodepth={len(nodepth_detections)} ({terminal_summary(nodepth_detections, names)}) | "
+            f"depth={len(depth_detections)} ({terminal_summary(depth_detections, names)})"
+        )
 
     output.mkdir(parents=True, exist_ok=True)
     (output / "predictions.json").write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"Saved {len(records)} samples to {output}")
+    print(f"Validation complete: {len(records)} samples")
+    print(f"Saved visualizations and predictions.json to {output}")
 
 
 if __name__ == "__main__":
