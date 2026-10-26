@@ -1,8 +1,8 @@
-"""Save Ultralytics-style ground-truth and two-model detection visualizations.
+"""Save four-panel Ultralytics-style ground-truth and model comparisons.
 
-The two weights are ordered as ``NODEPTH DEPTH``. Bounding boxes are rendered
-through :class:`ultralytics.engine.results.Results`, so class colors, labels,
-and confidence formatting match the official Ultralytics visualization.
+The two ``--weights`` are ordered as ``NODEPTH DEPTH``. The RGB-only baseline
+is supplied with ``--official-weight``. Each output image contains ground
+truth, RGB baseline, no-depth, and depth results, in that order.
 
 Example:
     python visualize_two_weights_paper.py \
@@ -28,6 +28,9 @@ from ultralytics.utils.nms import non_max_suppression
 from ultralytics.utils.torch_utils import select_device
 
 ROOT = Path(__file__).resolve().parent
+DEFAULT_OFFICIAL_WEIGHT = Path(
+    "/media/ddc/新加卷/hys/qmy/ultralytics/runs/detect/runs/train/yolo26-2/weights/best.pt"
+)
 IMAGE_SUFFIXES = {".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 AUX_SUFFIXES = ("_s0_rgb", "_s0_nir", "_dolp_rgb", "_dolp_nir", "_aolp_rgb", "_aolp_nir", "_depth")
 
@@ -35,6 +38,8 @@ AUX_SUFFIXES = ("_s0_rgb", "_s0_nir", "_dolp_rgb", "_dolp_nir", "_aolp_rgb", "_a
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", nargs=2, type=Path, required=True, metavar=("NODEPTH", "DEPTH"))
+    parser.add_argument("--official-weight", type=Path, default=DEFAULT_OFFICIAL_WEIGHT,
+                        help="RGB-only YOLO26n baseline checkpoint")
     parser.add_argument("--data", type=Path, required=True, help="Your detection dataset YAML")
     parser.add_argument("--split", choices=("train", "val", "test"), default="val")
     parser.add_argument("--output", type=Path, required=True)
@@ -153,6 +158,8 @@ def load_modalities(path, data, channels, data_file, dolp_root=None, depth_root=
 
 def normalize_input(image, channels, data):
     tensor = torch.from_numpy(np.ascontiguousarray(image.transpose(2, 0, 1))).unsqueeze(0).float()
+    if channels == 3:
+        return tensor / 255.0
     visual_channels = channels
     has_depth = channels == 4 + dolp_channel_count(data, channels)
     if has_depth:
@@ -252,9 +259,10 @@ def save_image(path, image):
 
 def main(args):
     weights = [p.expanduser().resolve() for p in args.weights]
+    official_weight = args.official_weight.expanduser().resolve()
     data_file = args.data.expanduser().resolve()
     output = args.output.expanduser().resolve()
-    for path in (*weights, data_file):
+    for path in (*weights, official_weight, data_file):
         if not path.is_file():
             raise FileNotFoundError(path)
     data = YAML.load(data_file)
@@ -262,37 +270,45 @@ def main(args):
     if args.max_images > 0:
         images = images[:args.max_images]
     device = select_device(args.device)
-    models = [YOLO(str(weight)) for weight in weights]
+    models = [YOLO(str(official_weight)), *(YOLO(str(weight)) for weight in weights)]
     channels = [model_channels(model) for model in models]
-    if channels[0] == channels[1]:
-        raise ValueError(f"Expected different no-depth/depth input channels, got {channels}")
+    if channels[0] != 3:
+        raise ValueError(f"RGB-only YOLO26n checkpoint must expect 3 input channels, got {channels[0]}")
+    if channels[1] == channels[2]:
+        raise ValueError(f"Expected different no-depth/depth input channels, got {channels[1:]}")
     for model in models:
         model.model.to(device).eval()
-    names = names_dict(models[0].names)
+    names = names_dict(models[1].names)
+    for label, model in zip(("official YOLO26n", "no-depth", "depth"), models):
+        model_names = names_dict(model.names)
+        if model_names != names:
+            raise ValueError(f"Class names for {label} do not match the no-depth model: {model_names} != {names}")
 
     records = []
     for index, image_path in enumerate(images, 1):
         loaded = [load_modalities(image_path, data, channel, data_file, args.dolp_root, args.depth_root)
-                  for channel in channels]
+                  for channel in channels[1:]]
         rgb_bgr = cv2.cvtColor(loaded[0][..., :3].astype(np.uint8), cv2.COLOR_RGB2BGR)
         truth = label_boxes(image_path, rgb_bgr.shape, args.labels_dir)
         truth_tensor = torch.tensor(
             [[*box, 1.0, class_id] for class_id, box in truth], dtype=torch.float32
         ) if truth else torch.empty((0, 6), dtype=torch.float32)
         gt_canvas = plot_results(rgb_bgr, truth_tensor, names, args.box_width, show_conf=False)
-        nodepth_detections = infer(models[0], loaded[0], data, args, device)
-        depth_detections = infer(models[1], loaded[1], data, args, device)
+        rgb_input = loaded[0][..., :3]
+        official_detections = infer(models[0], rgb_input, data, args, device)
+        nodepth_detections = infer(models[1], loaded[0], data, args, device)
+        depth_detections = infer(models[2], loaded[1], data, args, device)
+        official_canvas = plot_results(rgb_bgr, official_detections, names, args.box_width, show_conf=True)
         nodepth_canvas = plot_results(rgb_bgr, nodepth_detections, names, args.box_width, show_conf=True)
         depth_canvas = plot_results(rgb_bgr, depth_detections, names, args.box_width, show_conf=True)
 
         name = f"{index:06d}_{image_path.stem}.png"
-        save_image(output / "ground_truth" / name, gt_canvas)
-        save_image(output / "nodepth" / name, nodepth_canvas)
-        save_image(output / "depth" / name, depth_canvas)
-        save_image(output / "triptych" / name, np.concatenate((gt_canvas, nodepth_canvas, depth_canvas), axis=1))
+        comparison = np.concatenate((gt_canvas, official_canvas, nodepth_canvas, depth_canvas), axis=1)
+        save_image(output / name, comparison)
         records.append({
             "image": str(image_path),
             "ground_truth": [{"class_id": class_id, "xyxy": list(box)} for class_id, box in truth],
+            "official_yolo26n": prediction_records(official_detections, names),
             "nodepth": prediction_records(nodepth_detections, names),
             "depth": prediction_records(depth_detections, names),
         })
@@ -300,6 +316,7 @@ def main(args):
         print(
             f"[{index}/{len(images)}] {name} | "
             f"GT={len(truth)} ({gt_summary}) | "
+            f"official-yolo26n={len(official_detections)} ({terminal_summary(official_detections, names)}) | "
             f"nodepth={len(nodepth_detections)} ({terminal_summary(nodepth_detections, names)}) | "
             f"depth={len(depth_detections)} ({terminal_summary(depth_detections, names)})"
         )
