@@ -1,0 +1,13 @@
+# PZ RGB-only baseline, with the same splits and labels as the multimodal models.
+path: /media/ddc/新加卷/hys/qmy/pz
+train: train.txt
+val: val.txt
+channels: 3
+rgb_s0: true
+names:
+  0: Pedestrian
+  1: Car
+  2: Cyclist
+  3: Truck
+  4: Bus
+  5: Tricycle

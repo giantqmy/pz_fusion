@@ -659,7 +659,8 @@ def get_flops(model, imgsz=640):
         im = torch.empty((1, p.shape[1], *imgsz), device=p.device, dtype=p.dtype)  # input image in BCHW format
         custom_ops = {Attention: _attention_ops, AAttn: _attention_ops} if attn else None
         if rtdetr:  # RT-DETR cannot run the stride-sized proxy input
-            return thop.profile(model, inputs=[im], custom_ops=custom_ops, verbose=False)[0] / 1e9 * 2
+            # Shared HGBlock activations can retain THOP hooks; isolate profiling from the training model.
+            return thop.profile(deepcopy(model), inputs=[im], custom_ops=custom_ops, verbose=False)[0] / 1e9 * 2
         return thop.profile(model, inputs=[im], stride=stride, custom_ops=custom_ops, verbose=False)[0] / 1e9 * 2
     except Exception:
         return 0.0
