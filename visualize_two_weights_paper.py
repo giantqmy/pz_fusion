@@ -210,13 +210,6 @@ def prediction_records(detections, names):
     ]
 
 
-def terminal_summary(detections, names):
-    """Format detections for the terminal without adding text to saved images."""
-    if not len(detections):
-        return "none"
-    return ", ".join(f"{names[int(row[5])]} {float(row[4]):.2f}" for row in detections.tolist())
-
-
 def save_image(path, image):
     path.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(path), image):
@@ -409,16 +402,7 @@ def main(args):
             "nodepth": prediction_records(nodepth_detections, names),
             "depth": prediction_records(depth_detections, names),
         })
-        gt_summary = ", ".join(names.get(class_id, str(class_id)) for class_id, _ in truth) or "none"
-        print(
-            f"[{index}/{len(images)}] {name} | "
-            f"GT={len(truth)} ({gt_summary}) | "
-            f"yolo12n={len(yolo12_detections)} ({terminal_summary(yolo12_detections, names)}) | "
-            f"official-yolo26n={len(official_detections)} ({terminal_summary(official_detections, names)}) | "
-            f"pcdnet={len(pcdnet_detections)} ({terminal_summary(pcdnet_detections, names)}) | "
-            f"nodepth={len(nodepth_detections)} ({terminal_summary(nodepth_detections, names)}) | "
-            f"depth={len(depth_detections)} ({terminal_summary(depth_detections, names)})"
-        )
+        print(f"[{index}/{len(images)}] Saved {name}")
 
     output.mkdir(parents=True, exist_ok=True)
     (output / "predictions.json").write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
