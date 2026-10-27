@@ -2151,9 +2151,13 @@ def parse_model(d, ch, verbose=True):
             c1, c2 = ch[f], args[0]
             c2 = make_divisible(min(c2, max_channels) * width, 8)
             args = [c1, c2, *args[1:]]
-        elif m in {PZSAFFLateral, PZSAFFConcatLateral, PZSAFFConcatPreNormLateral}:
+        elif m in {PZSAFFLateral, PZSAFFConcatLateral}:
             c2 = ch[f]
             args = [c2, *args]
+        elif m is PZSAFFConcatPreNormLateral:
+            c1 = ch[f]
+            c2 = c1 // (args[3] if len(args) > 3 else 1)
+            args = [c1, *args]
         elif m is PZDepthStage:
             c1 = ch[f[0]] if isinstance(f, list) else ch[f]
             c2 = args[2] if len(args) > 2 else 32
