@@ -1,17 +1,20 @@
-"""Save six-panel Ultralytics-style ground-truth and model comparisons.
+"""Save named model panels and optional Ultralytics-style ground-truth comparisons.
 
-The two ``--weights`` are ordered as ``NODEPTH DEPTH``. The RGB-only baseline
-is supplied with ``--official-weight``, and YOLO12n with ``--yolo12-weight``.
-PCDNet is supplied with ``--pcdnet-weight`` and uses S0 RGB plus scalar AoLP/DoLP.
-Each output image contains ground truth, YOLO12n, YOLO26n, PCDNet, no-depth, and
-depth results, in that order. The six panels are also saved separately in
-``ground_truth/``, ``yolo12n/``, ``rgb_baseline/``, ``rgb_dolp/``, and
-``rgb_dolp_depth/``, plus ``pcdnet/`` under the output directory.
-All five models are validated on the complete selected split.
+Repeat ``--net NAME WEIGHTS`` to select models in comparison order. Names become
+output subdirectories; use ``pcdnet:NAME`` for a legacy PCDNet checkpoint.
+YOLO and RT-DETR checkpoints are detected automatically. Only selected models
+are loaded and validated. ``--no-save-comparison`` disables the combined image
+while retaining ground-truth/model subdirectories and full-split validation.
+Names are printed in the terminal, never added as custom titles to the images.
+The legacy ``--weights NODEPTH DEPTH`` command retains its seven-panel defaults.
+Each multimodal checkpoint independently selects scalar DoLP (4/5 input channels)
+or color DoLP (6/7 input channels). Scalar ``*_dolp_rgb.png`` maps default to the
+base image directory when the data YAML describes a different DoLP format.
 
 Example:
     python visualize_two_weights_paper.py \
-        --weights runs/nodepth/weights/best.pt runs/depth/weights/best.pt \
+        --net YOLO11n /path/to/yolo11n/best.pt \
+        --net RGB_DoLP /path/to/nodepth/best.pt \
         --data /path/to/your-dataset.yaml --split val \
         --output runs/paper_compare --device 0
 """
@@ -27,7 +30,7 @@ import torch
 
 from pcdnet import infer as infer_pcdnet
 from pcdnet import load_model as load_pcdnet
-from ultralytics import YOLO
+from ultralytics import RTDETR, YOLO
 from ultralytics.data.augment import LetterBox
 from ultralytics.data.pz_modalities import load_rgb_dolp, load_rgb_dolp_depth, normalize_modalities
 from ultralytics.data.utils import img2label_paths
@@ -46,25 +49,41 @@ DEFAULT_YOLO12_WEIGHT = Path(
 DEFAULT_PCDNET_WEIGHT = Path(
     "/media/ddc/新加卷/hys/qmy/PZ_8/runs/train/pcdnet_s0_aolp_dolp/weights/best.pt"
 )
+DEFAULT_RTDETR_WEIGHT = Path(
+    "/media/ddc/新加卷/hys/qmy/pz_fusion/runs/train/rtdetr_l_pz_rgb_scratch/weights/best.pt"
+)
 IMAGE_SUFFIXES = {".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 AUX_SUFFIXES = ("_s0_rgb", "_s0_nir", "_dolp_rgb", "_dolp_nir", "_aolp_rgb", "_aolp_nir", "_depth")
+SAVE_COMPARISON = True  # CLI: --save-comparison / --no-save-comparison
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--weights", nargs=2, type=Path, required=True, metavar=("NODEPTH", "DEPTH"))
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--net", nargs=2, action="append", metavar=("NAME", "WEIGHTS"),
+                           help="Repeat for each selected model; NAME is its folder/display name. PCDNet: pcdnet:NAME")
+    selection.add_argument("--weights", nargs=2, type=Path, metavar=("NODEPTH", "DEPTH"),
+                           help="Legacy mode: include both fusion weights and all four baseline defaults")
     parser.add_argument("--official-weight", type=Path, default=DEFAULT_OFFICIAL_WEIGHT,
                         help="RGB-only YOLO26n baseline checkpoint")
     parser.add_argument("--yolo12-weight", type=Path, default=DEFAULT_YOLO12_WEIGHT,
                         help="RGB-only YOLO12n baseline checkpoint")
     parser.add_argument("--pcdnet-weight", type=Path, default=DEFAULT_PCDNET_WEIGHT,
                         help="PCDNet best.pt from the migrated PZ_8/train_pcdnet.py")
+    parser.add_argument("--rtdetr-weight", type=Path, default=DEFAULT_RTDETR_WEIGHT,
+                        help="RGB-only RT-DETR-L baseline checkpoint")
     parser.add_argument("--aolp-root", type=Path, help="PCDNet scalar AoLP directory; default: beside each base image")
     parser.add_argument("--pcdnet-dolp-root", type=Path,
                         help="PCDNet scalar DoLP directory; separate from the color --dolp-root")
     parser.add_argument("--data", type=Path, required=True, help="Your detection dataset YAML")
     parser.add_argument("--split", choices=("train", "val", "test"), default="val")
     parser.add_argument("--output", type=Path, required=True)
+    comparison = parser.add_mutually_exclusive_group()
+    comparison.add_argument("--save-comparison", dest="save_comparison", action="store_true",
+                            help="Also save the complete horizontal comparison (default)")
+    comparison.add_argument("--no-save-comparison", dest="save_comparison", action="store_false",
+                            help="Save individual panels only; final validation still runs")
+    parser.set_defaults(save_comparison=SAVE_COMPARISON)
     parser.add_argument("--labels-dir", type=Path, help="Optional flat directory containing YOLO label txt files")
     parser.add_argument("--dolp-root", type=Path, help="Override data YAML dolp_root")
     parser.add_argument("--depth-root", type=Path, help="Override the inferred depth directory")
@@ -115,20 +134,21 @@ def source_images(data, split, data_file):
     return images
 
 
-def dolp_channel_count(data, channels):
-    """Return the DoLP channel count, defaulting to color DoLP for 6/7-channel models."""
-    return int(data.get("dolp_channels", 3 if channels in {6, 7, 9} else 1))
+def dolp_channel_count(channels):
+    """Derive scalar/color DoLP from the checkpoint's actual input channels."""
+    if channels in {4, 5}:
+        return 1
+    if channels in {6, 7}:
+        return 3
+    raise ValueError(f"Expected a 4/5-channel scalar or 6/7-channel color DoLP checkpoint, got {channels}")
 
 
 def load_modalities(path, data, channels, data_file, dolp_root=None, depth_root=None):
     """Load RGB, DoLP and optional depth in the channel order expected by a weight."""
-    dolp_channels = dolp_channel_count(data, channels)
-    if channels not in {3 + dolp_channels, 4 + dolp_channels}:
-        raise ValueError(
-            f"Weight expects {channels} channels, but data/dolp_channels imply {3 + dolp_channels} visual "
-            f"or {4 + dolp_channels} RGB-DoLP-depth channels"
-        )
-    dolp_dir = resolve_path(dolp_root or data.get("dolp_root", path.parent), data_file.parent)
+    modality = "rgb_dolp" if channels in {4, 6} else "rgb_dolp_depth"
+    config = validation_data(data, channels, modality, dolp_root)
+    dolp_channels = config["dolp_channels"]
+    dolp_dir = resolve_path(config.get("dolp_root", path.parent), data_file.parent)
     if channels == 3 + dolp_channels:
         return load_rgb_dolp(path, dolp_dir, dolp_channels)
     depth_dir = resolve_path(depth_root or data.get("depth_root", path.parent.parent / "depth"), data_file.parent)
@@ -145,6 +165,55 @@ def model_channels(model):
     if channels is None:
         raise ValueError("Could not determine input channels from model YAML")
     return int(channels)
+
+
+def load_models(args, device):
+    """Resolve ordered named models, preserving the legacy command's folders and JSON keys."""
+    if args.net:
+        specs = []
+        for name, weight in args.net:
+            kind = "pcdnet" if name.lower().startswith("pcdnet:") else "native"
+            name = name.split(":", 1)[1] if kind == "pcdnet" else name
+            specs.append((name, name, name, Path(weight), kind))
+    else:
+        specs = [
+            ("YOLO12n", "yolo12n", "yolo12n", args.yolo12_weight, "native"),
+            ("YOLO26n", "rgb_baseline", "official_yolo26n", args.official_weight, "native"),
+            ("RT-DETR-L", "rtdetr_l", "rtdetr_l", args.rtdetr_weight, "native"),
+            ("PCDNet", "pcdnet", "pcdnet", args.pcdnet_weight, "pcdnet"),
+            ("RGB+DoLP", "rgb_dolp", "nodepth", args.weights[0], "native"),
+            ("RGB+DoLP+Depth", "rgb_dolp_depth", "depth", args.weights[1], "native"),
+        ]
+    used = {"ground_truth", "image", "validation", "predictions.json", "validation_metrics.json"}
+    for _, folder, _, weight, _ in specs:
+        if (not folder.strip() or folder in {".", ".."} or folder.endswith((".", " "))
+                or any(char in folder for char in '<>:"/\\|?*') or folder.casefold() in used):
+            raise ValueError(f"Model names must be unique, valid directory names (ground_truth/validation reserved): {folder!r}")
+        used.add(folder.casefold())
+        if not weight.expanduser().is_file():
+            raise FileNotFoundError(weight)
+    entries = []
+    for name, folder, key, weight, kind in specs:
+        weight = weight.expanduser().resolve()
+        model = load_pcdnet(weight, device) if kind == "pcdnet" else YOLO(str(weight))
+        channels = 9 if kind == "pcdnet" else model_channels(model)
+        if kind != "pcdnet":
+            kind = "rtdetr" if isinstance(model, RTDETR) else "yolo"
+            if channels not in {3, 4, 5, 6, 7} or (kind == "rtdetr" and channels != 3):
+                raise ValueError(f"Unsupported {name} input: {kind}, {channels} channels")
+            model.model.to(device).eval()
+        entries.append(dict(name=name, folder=folder, key=key, model=model, kind=kind, channels=channels))
+        print(f"Model {name}: {kind}, {channels} channels; {weight}")
+    return entries
+
+
+def load_rgb(path):
+    """Read the dataset's S0 RGB independently of any optional polarization/depth inputs."""
+    rgb_path = path.with_name(f"{path.stem}_S0_rgb.png")
+    image = cv2.imread(str(rgb_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise FileNotFoundError(f"Missing S0 RGB input: {rgb_path}")
+    return image
 
 
 def infer(model, image, data, args, device):
@@ -216,16 +285,21 @@ def save_image(path, image):
         raise OSError(f"Failed to save image: {path}")
 
 
-def validation_data(data, channels, modality):
-    """Build the modality-specific dataset configuration expected by PZ7 val."""
+def validation_data(data, channels, modality, dolp_root=None):
+    """Select the checkpoint's DoLP format and use identical roots for visualization and val."""
     config = dict(data)
     config["channels"] = channels
     config["ch"] = channels
     config["rgb_s0"] = modality == "rgb_s0"
     config["rgb_dolp"] = modality == "rgb_dolp"
     config["rgb_dolp_depth"] = modality == "rgb_dolp_depth"
-    config["dolp_channels"] = dolp_channel_count(data, channels)
+    config["rgb_aolp_dolp"] = False
     if modality != "rgb_s0":
+        config["dolp_channels"] = dolp_channel_count(channels)
+        if int(data.get("dolp_channels", config["dolp_channels"])) != config["dolp_channels"]:
+            config.pop("dolp_root", None)
+        if dolp_root is not None:
+            config["dolp_root"] = str(dolp_root)
         expected = 3 + config["dolp_channels"] + int(modality == "rgb_dolp_depth")
         if channels != expected:
             raise ValueError(f"{modality} expects {expected} channels from the dataset config, but model expects {channels}")
@@ -244,11 +318,7 @@ def validate_pcdnet(model, names, data, args, device):
     images = source_images(data, args.split, args.data.expanduser().resolve())
     model.to(device).eval()
     for index, path in enumerate(images, 1):
-        rgb_path = path.with_name(f"{path.stem}_S0_rgb.png")
-        rgb = cv2.imread(str(rgb_path), cv2.IMREAD_COLOR)
-        if rgb is None:
-            raise FileNotFoundError(f"Missing PCDNet S0 input: {rgb_path}")
-        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(load_rgb(path), cv2.COLOR_BGR2RGB)
         detections = infer_pcdnet(model, path, rgb, args.imgsz, 0.001, 0.65, device,
                                   args.aolp_root, args.pcdnet_dolp_root, multi_label=True)
         truth = label_boxes(path, rgb.shape, args.labels_dir)
@@ -265,28 +335,27 @@ def validate_pcdnet(model, names, data, args, device):
     return {key: float(value) for key, value in metrics.results_dict.items()}
 
 
-def validate_models(models, pcdnet, names, data, args, output, device):
-    """Validate the four YOLO models and PCDNet independently on the selected split."""
+def validate_models(entries, names, data, args, output, device):
+    """Validate every selected model on the complete split with its matching input modalities."""
     from train_yolo26_pz5 import PZ5Validator
 
-    specs = (
-        ("yolo12n", models[0], 3, "rgb_s0", None),
-        ("official_yolo26n", models[1], 3, "rgb_s0", None),
-        ("nodepth", models[2], model_channels(models[2]), "rgb_dolp", PZ5Validator),
-        ("depth", models[3], model_channels(models[3]), "rgb_dolp_depth", PZ5Validator),
-    )
     metrics_by_model = {}
     validation_root = output / "validation"
     validation_root.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="pz7_val_data_") as temp_dir:
-        pcdnet.to("cpu")
-        for name, model, channels, modality, validator in specs:
-            config = validation_data(data, channels, modality)
-            data_yaml = Path(temp_dir) / f"{name}.yaml"
+        for entry in entries:
+            name, model, channels = entry["key"], entry["model"], entry["channels"]
+            for other in entries:
+                (other["model"] if other["kind"] == "pcdnet" else other["model"].model).to("cpu")
+            if entry["kind"] == "pcdnet":
+                metrics_by_model[name] = validate_pcdnet(model, names, data, args, device)
+                print(f"val/{entry['name']}: {json.dumps(metrics_by_model[name], ensure_ascii=False)}")
+                continue
+            modality = "rgb_s0" if channels == 3 else "rgb_dolp" if channels in {4, 6} else "rgb_dolp_depth"
+            config = validation_data(data, channels, modality, data.get("dolp_root") if args.dolp_root else None)
+            data_yaml = Path(temp_dir) / f"{entry['folder']}.yaml"
             YAML.save(data_yaml, config)
-            for other in models:
-                other.model.to("cpu")
             model.model.to(device).eval()
             val_kwargs = {
                 "data": str(data_yaml),
@@ -296,21 +365,19 @@ def validate_models(models, pcdnet, names, data, args, output, device):
                 "workers": args.workers,
                 "device": args.device,
                 "project": str(validation_root),
-                "name": name,
+                "name": entry["folder"],
                 "exist_ok": True,
                 "plots": False,
                 "save_json": False,
                 "verbose": False,
             }
-            if validator is not None:
-                val_kwargs["validator"] = validator
+            if channels != 3:
+                val_kwargs["validator"] = PZ5Validator
             result = model.val(**val_kwargs)
             metrics_by_model[name] = {key: float(value) for key, value in result.results_dict.items()}
-            print(f"val/{name}: {json.dumps(metrics_by_model[name], ensure_ascii=False)}")
+            print(f"val/{entry['name']}: {json.dumps(metrics_by_model[name], ensure_ascii=False)}")
             model.model.to("cpu")
 
-    metrics_by_model["pcdnet"] = validate_pcdnet(pcdnet, names, data, args, device)
-    print(f"val/pcdnet: {json.dumps(metrics_by_model['pcdnet'], ensure_ascii=False)}")
     metrics_file = output / "validation_metrics.json"
     metrics_file.write_text(json.dumps(metrics_by_model, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Saved validation metrics to {metrics_file}")
@@ -318,15 +385,10 @@ def validate_models(models, pcdnet, names, data, args, output, device):
 
 
 def main(args):
-    weights = [p.expanduser().resolve() for p in args.weights]
-    official_weight = args.official_weight.expanduser().resolve()
-    yolo12_weight = args.yolo12_weight.expanduser().resolve()
-    pcdnet_weight = args.pcdnet_weight.expanduser().resolve()
     data_file = args.data.expanduser().resolve()
     output = args.output.expanduser().resolve()
-    for path in (*weights, official_weight, yolo12_weight, pcdnet_weight, data_file):
-        if not path.is_file():
-            raise FileNotFoundError(path)
+    if not data_file.is_file():
+        raise FileNotFoundError(data_file)
     data = YAML.load(data_file)
     data["path"] = str(resolve_path(data.get("path", "."), data_file.parent))
     for key, override in (("dolp_root", args.dolp_root), ("depth_root", args.depth_root)):
@@ -341,74 +403,62 @@ def main(args):
     if args.max_images > 0:
         images = images[:args.max_images]
     device = select_device(args.device)
-    models = [YOLO(str(yolo12_weight)), YOLO(str(official_weight)), *(YOLO(str(weight)) for weight in weights)]
-    channels = [model_channels(model) for model in models]
-    if channels[:2] != [3, 3]:
-        raise ValueError(f"RGB-only YOLO12n and YOLO26n checkpoints must expect 3 input channels, got {channels[:2]}")
-    if channels[2] == channels[3]:
-        raise ValueError(f"Expected different no-depth/depth input channels, got {channels[2:]}")
-    for model in models:
-        model.model.to(device).eval()
-    names = names_dict(models[2].names)
-    for label, model in zip(("YOLO12n", "official YOLO26n", "no-depth", "depth"), models):
-        model_names = names_dict(model.names)
+    entries = load_models(args, device)
+    names = names_dict(entries[0]["model"].names)
+    for entry in entries:
+        model_names = names_dict(entry["model"].names)
         if model_names != names:
-            raise ValueError(f"Class names for {label} do not match the no-depth model: {model_names} != {names}")
-    pcdnet = load_pcdnet(pcdnet_weight, device)
-    if names_dict(pcdnet.names) != names or pcdnet.model[-1].nc != len(names):
-        raise ValueError("PCDNet checkpoint class IDs/names must match the comparison dataset")
-    print("Panel order: ground truth | YOLO12n | YOLO26n | PCDNet | RGB+DoLP | RGB+DoLP+Depth")
+            raise ValueError(f"Class IDs/names for {entry['name']} do not match: {model_names} != {names}")
+    print("Panel order: ground truth | " + " | ".join(entry["name"] for entry in entries))
+    print(f"Save complete comparison: {args.save_comparison}")
 
     records = []
     for index, image_path in enumerate(images, 1):
-        loaded = [load_modalities(image_path, data, channel, data_file, args.dolp_root, args.depth_root)
-                  for channel in channels[2:]]
-        rgb_bgr = cv2.cvtColor(loaded[0][..., :3].astype(np.uint8), cv2.COLOR_RGB2BGR)
+        rgb_bgr = load_rgb(image_path)
+        rgb_input = cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB)
         truth = label_boxes(image_path, rgb_bgr.shape, args.labels_dir)
         truth_tensor = torch.tensor(
             [[*box, 1.0, class_id] for class_id, box in truth], dtype=torch.float32
         ) if truth else torch.empty((0, 6), dtype=torch.float32)
         gt_canvas = plot_results(rgb_bgr, truth_tensor, names, args.box_width, show_conf=False)
-        rgb_input = loaded[0][..., :3]
-        yolo12_detections = infer(models[0], rgb_input, data, args, device)
-        official_detections = infer(models[1], rgb_input, data, args, device)
-        pcdnet_detections = infer_pcdnet(pcdnet, image_path, rgb_input, args.imgsz, args.conf, args.iou,
-                                        device, args.aolp_root, args.pcdnet_dolp_root)
-        nodepth_detections = infer(models[2], loaded[0], data, args, device)
-        depth_detections = infer(models[3], loaded[1], data, args, device)
-        yolo12_canvas = plot_results(rgb_bgr, yolo12_detections, names, args.box_width, show_conf=True)
-        official_canvas = plot_results(rgb_bgr, official_detections, names, args.box_width, show_conf=True)
-        pcdnet_canvas = plot_results(rgb_bgr, pcdnet_detections, names, args.box_width, show_conf=True)
-        nodepth_canvas = plot_results(rgb_bgr, nodepth_detections, names, args.box_width, show_conf=True)
-        depth_canvas = plot_results(rgb_bgr, depth_detections, names, args.box_width, show_conf=True)
-
         name = f"{index:06d}_{image_path.stem}.png"
-        comparison = np.concatenate(
-            (gt_canvas, yolo12_canvas, official_canvas, pcdnet_canvas, nodepth_canvas, depth_canvas), axis=1
-        )
-        save_image(output / name, comparison)
         save_image(output / "ground_truth" / name, gt_canvas)
-        save_image(output / "yolo12n" / name, yolo12_canvas)
-        save_image(output / "rgb_baseline" / name, official_canvas)
-        save_image(output / "pcdnet" / name, pcdnet_canvas)
-        save_image(output / "rgb_dolp" / name, nodepth_canvas)
-        save_image(output / "rgb_dolp_depth" / name, depth_canvas)
-        records.append({
+        record = {
             "image": str(image_path),
             "ground_truth": [{"class_id": class_id, "xyxy": list(box)} for class_id, box in truth],
-            "yolo12n": prediction_records(yolo12_detections, names),
-            "official_yolo26n": prediction_records(official_detections, names),
-            "pcdnet": prediction_records(pcdnet_detections, names),
-            "nodepth": prediction_records(nodepth_detections, names),
-            "depth": prediction_records(depth_detections, names),
-        })
+        }
+        canvases = [gt_canvas]
+        loaded = {3: rgb_input}
+        for entry in entries:
+            model, channels = entry["model"], entry["channels"]
+            if entry["kind"] == "pcdnet":
+                detections = infer_pcdnet(model, image_path, rgb_input, args.imgsz, args.conf, args.iou,
+                                          device, args.aolp_root, args.pcdnet_dolp_root)
+            elif entry["kind"] == "rtdetr":
+                # RT-DETR owns its square stretch and decoder postprocessing (no YOLO NMS).
+                result = model.predict(source=rgb_bgr, imgsz=args.imgsz, conf=args.conf,
+                                       device=args.device, max_det=300, save=False, verbose=False)[0]
+                detections = result.boxes.data.detach().cpu()
+            else:
+                if channels not in loaded:
+                    loaded[channels] = load_modalities(image_path, data, channels, data_file,
+                                                       args.dolp_root, args.depth_root)
+                detections = infer(model, loaded[channels], data, args, device)
+            canvas = plot_results(rgb_bgr, detections, names, args.box_width, show_conf=True)
+            save_image(output / entry["folder"] / name, canvas)
+            if args.save_comparison:
+                canvases.append(canvas)
+            record[entry["key"]] = prediction_records(detections, names)
+        if args.save_comparison:
+            save_image(output / name, np.concatenate(canvases, axis=1))
+        records.append(record)
         print(f"[{index}/{len(images)}] Saved {name}")
 
     output.mkdir(parents=True, exist_ok=True)
     (output / "predictions.json").write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Visualization complete: {len(records)} samples; starting full-split model validation")
     print(f"Saved visualizations and predictions.json to {output}")
-    validate_models(models, pcdnet, names, data, args, output, device)
+    validate_models(entries, names, data, args, output, device)
 
 
 if __name__ == "__main__":
