@@ -3,6 +3,8 @@
 The two ``--weights`` are ordered as ``NODEPTH DEPTH``. The RGB-only baseline
 is supplied with ``--official-weight``. Each output image contains ground
 truth, RGB baseline, no-depth, and depth results, in that order.
+The four panels are also saved separately in ``ground_truth/``, ``rgb_baseline/``,
+``rgb_dolp/``, and ``rgb_dolp_depth/`` under the output directory.
 
 Example:
     python visualize_two_weights_paper.py \
@@ -370,6 +372,10 @@ def main(args):
         name = f"{index:06d}_{image_path.stem}.png"
         comparison = np.concatenate((gt_canvas, official_canvas, nodepth_canvas, depth_canvas), axis=1)
         save_image(output / name, comparison)
+        save_image(output / "ground_truth" / name, gt_canvas)
+        save_image(output / "rgb_baseline" / name, official_canvas)
+        save_image(output / "rgb_dolp" / name, nodepth_canvas)
+        save_image(output / "rgb_dolp_depth" / name, depth_canvas)
         records.append({
             "image": str(image_path),
             "ground_truth": [{"class_id": class_id, "xyxy": list(box)} for class_id, box in truth],
