@@ -233,7 +233,7 @@ def _save_saff_effect(before: Any, after: Any, rgb: np.ndarray, directory: Path,
     )
     (directory / "p2_saff_effect.txt").write_text(
         "Before: concatenated RGB/DoLP state entering PZSAFFConcatLateral (after PIM).\n"
-        "After: PZSAFFConcatLateral output, including 1x1 Conv + BN + SiLU.\n"
+        "After: SAFF lateral output, including its normalization and output projection.\n"
         "Response: mean(abs(feature), channel axis), using every channel.\n"
         "Before/after share vmin=0 and vmax=max(before.max(), after.max()).\n"
         "Change: after response minus before response; red=increase, blue=decrease.\n"
@@ -304,9 +304,11 @@ class FeatureRecorder:
         self.features[name] = _to_feature(value)
 
     def _attach(self, model):
+        from ultralytics.nn.modules.pz import PZSAFFConcatLateral
+
         layers = getattr(model, "model", model)
         layers = getattr(layers, "model", layers)
-        stage_numbers = {"pim": 0, "PZSAFFConcatLateral": 0, "PZHMoEJointFusion": 0}
+        stage_numbers = {"pim": 0, "saff": 0, "PZHMoEJointFusion": 0}
         pim_stage_types = {"PZDualPIMStage", "PZDualEdgeWTStage", "PZDualEdgeWTZeroStage"}
         pyramid_levels = ("p2", "p3", "p4", "p5")
         for index, module in enumerate(layers):
@@ -333,9 +335,9 @@ class FeatureRecorder:
                         ),
                     ]
                 )
-            elif name == "PZSAFFConcatLateral":
-                level = pyramid_levels[stage_numbers[name]]
-                stage_numbers[name] += 1
+            elif isinstance(module, PZSAFFConcatLateral):
+                level = pyramid_levels[stage_numbers["saff"]]
+                stage_numbers["saff"] += 1
                 self.handles.extend(
                     [
                         module.register_forward_pre_hook(

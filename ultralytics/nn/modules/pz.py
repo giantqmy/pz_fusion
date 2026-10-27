@@ -673,6 +673,27 @@ class PZSAFFConcatLateral(PZSAFFLateral):
     attention_type = _SparseSAFFConcat
 
 
+class PZSAFFConcatPreNormLateral(PZSAFFConcatLateral):
+    """Normalize RGB/DoLP SAFF outputs separately before concatenation and linear fusion.
+
+    Args:
+        channels (int): Total input/output channels, split equally between the two modalities.
+        topk (int): Number of routed windows per query window.
+        n_win (int): Number of windows along each spatial axis.
+        kv_ratio (int): Average pooling ratio within each K/V window.
+    """
+
+    def __init__(self, channels: int, topk: int = 4, n_win: int = 8, kv_ratio: int = 4):
+        super().__init__(channels, topk, n_win, kv_ratio)
+        self.norm_rgb = _ChannelLayerNorm(channels // 2, eps=1e-6)
+        self.norm_dolp = _ChannelLayerNorm(channels // 2, eps=1e-6)
+        self.out_fuse = nn.Conv2d(channels, channels, 1)
+
+    def forward(self, x):
+        rgb, dolp = self.saff(*x.chunk(2, dim=1))
+        return self.out_fuse(torch.cat((self.norm_rgb(rgb), self.norm_dolp(dolp)), dim=1))
+
+
 class PZDepthStage(nn.Module):
     """One cascaded depth stage. The first stage extracts the final raw input channel."""
 

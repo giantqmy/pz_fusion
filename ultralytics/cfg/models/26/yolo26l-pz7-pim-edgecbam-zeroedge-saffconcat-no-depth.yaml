@@ -1,4 +1,4 @@
-# L-scale RGB/color-DoLP dual wavelet PIM with zero-initialized edge residual.
+# L-scale zero-edge PIM with independent RGB/DoLP LayerNorm before SAFF output concatenation.
 nc: 6
 channels: 6
 ch: 6
@@ -15,13 +15,13 @@ scales:
 backbone:
   - [-1, 1, nn.Identity, []]                              # 0 RGB + color DoLP
   - [0, 1, PZDualEdgeWTZeroStage, [128, 4, 1, 0.0]]      # 1 P2 dual state
-  - [1, 1, PZSAFFConcatLateral, [2, 16, 4]]              # 2 P2 lateral
+  - [1, 1, PZSAFFConcatPreNormLateral, [2, 16, 4]]       # 2 P2 lateral
   - [1, 1, PZDualEdgeWTZeroStage, [256, 2, 1, 0.0]]      # 3 P3 dual state
-  - [3, 1, PZSAFFConcatLateral, [2, 8, 4]]               # 4 P3 lateral
+  - [3, 1, PZSAFFConcatPreNormLateral, [2, 8, 4]]        # 4 P3 lateral
   - [3, 1, PZDualEdgeWTZeroStage, [512, 2, 2, 0.0]]      # 5 P4 dual state
-  - [5, 1, PZSAFFConcatLateral, [4, 4, 4]]               # 6 P4 lateral
+  - [5, 1, PZSAFFConcatPreNormLateral, [4, 4, 4]]        # 6 P4 lateral
   - [5, 1, PZDualEdgeWTZeroStage, [1024, 2, 1, 0.0]]     # 7 P5 dual state
-  - [7, 1, PZSAFFConcatLateral, [8, 4, 2]]               # 8 P5 lateral
+  - [7, 1, PZSAFFConcatPreNormLateral, [8, 4, 2]]        # 8 P5 lateral
 
 head:
   - [-1, 1, nn.Upsample, [None, 2, nearest]]             # 9
