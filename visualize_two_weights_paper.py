@@ -1,10 +1,11 @@
-"""Save four-panel Ultralytics-style ground-truth and model comparisons.
+"""Save five-panel Ultralytics-style ground-truth and model comparisons.
 
 The two ``--weights`` are ordered as ``NODEPTH DEPTH``. The RGB-only baseline
-is supplied with ``--official-weight``. Each output image contains ground
-truth, RGB baseline, no-depth, and depth results, in that order.
-The four panels are also saved separately in ``ground_truth/``, ``rgb_baseline/``,
-``rgb_dolp/``, and ``rgb_dolp_depth/`` under the output directory.
+is supplied with ``--official-weight``, and YOLO12n with ``--yolo12-weight``.
+Each output image contains ground truth, YOLO12n, YOLO26n, no-depth, and depth
+results, in that order. The five panels are also saved separately in
+``ground_truth/``, ``yolo12n/``, ``rgb_baseline/``, ``rgb_dolp/``, and
+``rgb_dolp_depth/`` under the output directory. All four models are validated.
 
 Example:
     python visualize_two_weights_paper.py \
@@ -32,6 +33,9 @@ from ultralytics.utils.torch_utils import select_device
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_OFFICIAL_WEIGHT = Path(
+    "/media/ddc/新加卷/hys/qmy/ultralytics/runs/detect/runs/train/yolo26/weights/best.pt"
+)
+DEFAULT_YOLO12_WEIGHT = Path(
     "/media/ddc/新加卷/hys/qmy/ultralytics/runs/detect/runs/train/yolo26-2/weights/best.pt"
 )
 IMAGE_SUFFIXES = {".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
@@ -43,6 +47,8 @@ def parse_args():
     parser.add_argument("--weights", nargs=2, type=Path, required=True, metavar=("NODEPTH", "DEPTH"))
     parser.add_argument("--official-weight", type=Path, default=DEFAULT_OFFICIAL_WEIGHT,
                         help="RGB-only YOLO26n baseline checkpoint")
+    parser.add_argument("--yolo12-weight", type=Path, default=DEFAULT_YOLO12_WEIGHT,
+                        help="RGB-only YOLO12n baseline checkpoint")
     parser.add_argument("--data", type=Path, required=True, help="Your detection dataset YAML")
     parser.add_argument("--split", choices=("train", "val", "test"), default="val")
     parser.add_argument("--output", type=Path, required=True)
@@ -274,13 +280,14 @@ def validation_data(data, channels, modality):
 
 
 def validate_models(models, names, data, args, output, device):
-    """Run Ultralytics validation independently for RGB, visual-only, and depth models."""
+    """Run Ultralytics validation independently for both RGB baselines and both multimodal models."""
     from train_yolo26_pz5 import PZ5Validator
 
     specs = (
-        ("official_yolo26n", models[0], 3, "rgb_s0", None),
-        ("nodepth", models[1], model_channels(models[1]), "rgb_dolp", PZ5Validator),
-        ("depth", models[2], model_channels(models[2]), "rgb_dolp_depth", PZ5Validator),
+        ("yolo12n", models[0], 3, "rgb_s0", None),
+        ("official_yolo26n", models[1], 3, "rgb_s0", None),
+        ("nodepth", models[2], model_channels(models[2]), "rgb_dolp", PZ5Validator),
+        ("depth", models[3], model_channels(models[3]), "rgb_dolp_depth", PZ5Validator),
     )
     metrics_by_model = {}
     validation_root = output / "validation"
@@ -324,9 +331,10 @@ def validate_models(models, names, data, args, output, device):
 def main(args):
     weights = [p.expanduser().resolve() for p in args.weights]
     official_weight = args.official_weight.expanduser().resolve()
+    yolo12_weight = args.yolo12_weight.expanduser().resolve()
     data_file = args.data.expanduser().resolve()
     output = args.output.expanduser().resolve()
-    for path in (*weights, official_weight, data_file):
+    for path in (*weights, official_weight, yolo12_weight, data_file):
         if not path.is_file():
             raise FileNotFoundError(path)
     data = YAML.load(data_file)
@@ -337,16 +345,16 @@ def main(args):
     if args.max_images > 0:
         images = images[:args.max_images]
     device = select_device(args.device)
-    models = [YOLO(str(official_weight)), *(YOLO(str(weight)) for weight in weights)]
+    models = [YOLO(str(yolo12_weight)), YOLO(str(official_weight)), *(YOLO(str(weight)) for weight in weights)]
     channels = [model_channels(model) for model in models]
-    if channels[0] != 3:
-        raise ValueError(f"RGB-only YOLO26n checkpoint must expect 3 input channels, got {channels[0]}")
-    if channels[1] == channels[2]:
-        raise ValueError(f"Expected different no-depth/depth input channels, got {channels[1:]}")
+    if channels[:2] != [3, 3]:
+        raise ValueError(f"RGB-only YOLO12n and YOLO26n checkpoints must expect 3 input channels, got {channels[:2]}")
+    if channels[2] == channels[3]:
+        raise ValueError(f"Expected different no-depth/depth input channels, got {channels[2:]}")
     for model in models:
         model.model.to(device).eval()
-    names = names_dict(models[1].names)
-    for label, model in zip(("official YOLO26n", "no-depth", "depth"), models):
+    names = names_dict(models[2].names)
+    for label, model in zip(("YOLO12n", "official YOLO26n", "no-depth", "depth"), models):
         model_names = names_dict(model.names)
         if model_names != names:
             raise ValueError(f"Class names for {label} do not match the no-depth model: {model_names} != {names}")
@@ -354,7 +362,7 @@ def main(args):
     records = []
     for index, image_path in enumerate(images, 1):
         loaded = [load_modalities(image_path, data, channel, data_file, args.dolp_root, args.depth_root)
-                  for channel in channels[1:]]
+                  for channel in channels[2:]]
         rgb_bgr = cv2.cvtColor(loaded[0][..., :3].astype(np.uint8), cv2.COLOR_RGB2BGR)
         truth = label_boxes(image_path, rgb_bgr.shape, args.labels_dir)
         truth_tensor = torch.tensor(
@@ -362,23 +370,27 @@ def main(args):
         ) if truth else torch.empty((0, 6), dtype=torch.float32)
         gt_canvas = plot_results(rgb_bgr, truth_tensor, names, args.box_width, show_conf=False)
         rgb_input = loaded[0][..., :3]
-        official_detections = infer(models[0], rgb_input, data, args, device)
-        nodepth_detections = infer(models[1], loaded[0], data, args, device)
-        depth_detections = infer(models[2], loaded[1], data, args, device)
+        yolo12_detections = infer(models[0], rgb_input, data, args, device)
+        official_detections = infer(models[1], rgb_input, data, args, device)
+        nodepth_detections = infer(models[2], loaded[0], data, args, device)
+        depth_detections = infer(models[3], loaded[1], data, args, device)
+        yolo12_canvas = plot_results(rgb_bgr, yolo12_detections, names, args.box_width, show_conf=True)
         official_canvas = plot_results(rgb_bgr, official_detections, names, args.box_width, show_conf=True)
         nodepth_canvas = plot_results(rgb_bgr, nodepth_detections, names, args.box_width, show_conf=True)
         depth_canvas = plot_results(rgb_bgr, depth_detections, names, args.box_width, show_conf=True)
 
         name = f"{index:06d}_{image_path.stem}.png"
-        comparison = np.concatenate((gt_canvas, official_canvas, nodepth_canvas, depth_canvas), axis=1)
+        comparison = np.concatenate((gt_canvas, yolo12_canvas, official_canvas, nodepth_canvas, depth_canvas), axis=1)
         save_image(output / name, comparison)
         save_image(output / "ground_truth" / name, gt_canvas)
+        save_image(output / "yolo12n" / name, yolo12_canvas)
         save_image(output / "rgb_baseline" / name, official_canvas)
         save_image(output / "rgb_dolp" / name, nodepth_canvas)
         save_image(output / "rgb_dolp_depth" / name, depth_canvas)
         records.append({
             "image": str(image_path),
             "ground_truth": [{"class_id": class_id, "xyxy": list(box)} for class_id, box in truth],
+            "yolo12n": prediction_records(yolo12_detections, names),
             "official_yolo26n": prediction_records(official_detections, names),
             "nodepth": prediction_records(nodepth_detections, names),
             "depth": prediction_records(depth_detections, names),
@@ -387,6 +399,7 @@ def main(args):
         print(
             f"[{index}/{len(images)}] {name} | "
             f"GT={len(truth)} ({gt_summary}) | "
+            f"yolo12n={len(yolo12_detections)} ({terminal_summary(yolo12_detections, names)}) | "
             f"official-yolo26n={len(official_detections)} ({terminal_summary(official_detections, names)}) | "
             f"nodepth={len(nodepth_detections)} ({terminal_summary(nodepth_detections, names)}) | "
             f"depth={len(depth_detections)} ({terminal_summary(depth_detections, names)})"
