@@ -123,7 +123,9 @@ class YOLODataset(BaseDataset):
         if self.data.get("rgb_dolp_depth"):
             from ultralytics.data.pz_modalities import load_rgb_dolp_depth
 
-            return load_rgb_dolp_depth(path, self.data.get("dolp_root"), self.data.get("dolp_channels", 1))
+            return load_rgb_dolp_depth(
+                path, self.data.get("dolp_root"), self.data.get("dolp_channels", 1), self.data.get("depth_root")
+            )
         if not self.data.get("rgb_dolp"):
             return super().load_image_file(path, flags)
 

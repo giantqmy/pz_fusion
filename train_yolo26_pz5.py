@@ -19,7 +19,7 @@ class PZ5Validator(DetectionValidator):
         for key, value in batch.items():
             if isinstance(value, torch.Tensor):
                 batch[key] = value.to(self.device, non_blocking=self.device.type not in {"cpu", "mps"})
-        batch["img"] = normalize_modalities(batch["img"])
+        batch["img"] = normalize_modalities(batch["img"], self.data)
         return batch
 
 
@@ -33,7 +33,7 @@ class PZ5Trainer(DetectionTrainer):
         for key, value in batch.items():
             if isinstance(value, torch.Tensor):
                 batch[key] = value.to(self.device, non_blocking=self.device.type not in {"cpu", "mps"})
-        batch["img"] = normalize_modalities(batch["img"])
+        batch["img"] = normalize_modalities(batch["img"], self.data)
         return batch
 
     def get_validator(self):

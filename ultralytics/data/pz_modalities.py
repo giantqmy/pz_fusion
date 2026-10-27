@@ -66,11 +66,17 @@ def load_rgb_aolp_dolp(
     return image
 
 
-def load_rgb_dolp_depth(path: str | Path, dolp_root: str | Path | None = None, dolp_channels: int = 1) -> np.ndarray:
+def load_rgb_dolp_depth(
+    path: str | Path,
+    dolp_root: str | Path | None = None,
+    dolp_channels: int = 1,
+    depth_root: str | Path | None = None,
+) -> np.ndarray:
     """Load aligned RGB, DoLP and raw uint16 depth channels."""
     path = Path(path)
     visual = _load_rgb_dolp(path, dolp_root=dolp_root, dolp_channels=dolp_channels)
-    depth_path = path.parent.parent / "depth" / f"{path.stem}_depth_dense_u16.png"
+    depth_dir = Path(depth_root) if depth_root is not None else path.parent.parent / "depth"
+    depth_path = depth_dir / f"{path.stem}_depth_dense_u16.png"
     depth = cv2.imread(str(depth_path), cv2.IMREAD_UNCHANGED)
     if depth is None:
         raise FileNotFoundError(f"Missing depth input for {path}: {depth_path}")
@@ -84,13 +90,17 @@ def load_rgb_dolp_depth(path: str | Path, dolp_root: str | Path | None = None, d
     return image
 
 
-def normalize_modalities(images: torch.Tensor) -> torch.Tensor:
-    """Normalize visual-only or RGB/DoLP/depth BCHW inputs."""
-    if images.ndim != 4 or images.shape[1] not in {4, 5, 6, 7, 9}:
-        raise ValueError(f"Expected BCHW four- to nine-channel modality input, got {tuple(images.shape)}")
+def normalize_modalities(images: torch.Tensor, data: dict | None = None) -> torch.Tensor:
+    """Normalize BCHW visual inputs and optional depth using dataset overrides or the training defaults."""
+    if images.ndim != 4 or images.shape[1] not in {3, 4, 5, 6, 7, 9}:
+        raise ValueError(f"Expected BCHW input with 3, 4, 5, 6, 7 or 9 channels, got {tuple(images.shape)}")
     images = images.float()
-    if images.shape[1] in {4, 6, 9}:
+    if images.shape[1] in {3, 4, 6, 9}:
         return images / 255.0
+    data = data or {}
+    scale = float(data.get("depth_scale", 256.0))
+    mean = float(data.get("depth_mean", DEPTH_MEAN_M))
+    std = float(data.get("depth_std", DEPTH_STD_M))
     depth = images[:, -1:]
-    normalized_depth = torch.where(depth > 0, (depth / 256.0 - DEPTH_MEAN_M) / DEPTH_STD_M, 0.0)
+    normalized_depth = torch.where(depth > 0, (depth / scale - mean) / std, 0.0)
     return torch.cat((images[:, :-1] / 255.0, normalized_depth), dim=1)
