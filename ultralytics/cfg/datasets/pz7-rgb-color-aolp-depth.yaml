@@ -5,7 +5,7 @@ val: val.txt
 channels: 7
 ch: 7
 rgb_aolp_depth: true
-aolp_root: /media/ddc/新加卷/hys/qmy/pz/AOLP_RGB
+aolp_root: /media/ddc/新加卷/hys/qmy/pz/RGBAOLP_color_all
 aolp_channels: 3
 depth_root: /media/ddc/新加卷/hys/qmy/pz/depth
 names:
