@@ -279,6 +279,21 @@ def prediction_records(detections, names):
     ]
 
 
+def print_class_ap(model_name, box_metrics, names):
+    """Print AP50 and AP50-95 for every class, marking classes absent from val as N/A."""
+    class_ap = {
+        int(class_id): values
+        for class_id, values in zip(box_metrics.ap_class_index, box_metrics.all_ap)
+    }
+    rows = []
+    for class_id, class_name in names.items():
+        values = class_ap.get(class_id)
+        ap50 = f"{values[0]:.4f}" if values is not None else "N/A"
+        ap5095 = f"{values.mean():.4f}" if values is not None else "N/A"
+        rows.append(f"{class_name}: AP50={ap50}, AP50-95={ap5095}")
+    print(f"val/{model_name} per-class AP: " + " | ".join(rows))
+
+
 def save_image(path, image):
     path.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(path), image):
@@ -331,6 +346,7 @@ def validate_pcdnet(model, names, data, args, device):
                               "target_img": np.unique(classes.numpy()), "im_name": str(path)})
         print(f"val/pcdnet [{index}/{len(images)}]: {path.name}")
     metrics.process()
+    print_class_ap("pcdnet", metrics.box, names)
     model.to("cpu")
     return {key: float(value) for key, value in metrics.results_dict.items()}
 
@@ -376,6 +392,7 @@ def validate_models(entries, names, data, args, output, device):
             result = model.val(**val_kwargs)
             metrics_by_model[name] = {key: float(value) for key, value in result.results_dict.items()}
             print(f"val/{entry['name']}: {json.dumps(metrics_by_model[name], ensure_ascii=False)}")
+            print_class_ap(entry["name"], result.box, names)
             model.model.to("cpu")
 
     metrics_file = output / "validation_metrics.json"
