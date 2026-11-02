@@ -211,8 +211,8 @@ def load_models(args, device):
 
 
 def load_rgb(path):
-    """Read the dataset's S0 RGB independently of any optional polarization/depth inputs."""
-    rgb_path = path if path.stem.lower().endswith("_s0_rgb") else path.with_name(f"{path.stem}_S0_rgb.png")
+    """Read either a listed RGB image or its paired S0 RGB file."""
+    rgb_path = path if path.stem.lower().endswith("_s0_rgb") or path.suffix.lower() in {".tif", ".tiff"} else path.with_name(f"{path.stem}_S0_rgb.png")
     image = cv2.imread(str(rgb_path), cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(f"Missing S0 RGB input: {rgb_path}")
@@ -238,9 +238,21 @@ def label_boxes(image_path, image_shape, labels_dir):
     stem = image_path.stem
     if stem.lower().endswith("_s0_rgb"):
         stem = stem[:-len("_S0_rgb")]
-    label = labels_dir / f"{stem}.txt" if labels_dir else Path(img2label_paths([str(image_path)])[0])
-    if not labels_dir and image_path.stem.lower().endswith("_s0_rgb"):
-        label = label.with_name(f"{stem}{label.suffix}")
+    if labels_dir:
+        label = labels_dir / f"{stem}.txt"
+    else:
+        label = Path(img2label_paths([str(image_path)])[0])
+        if image_path.stem.lower().endswith("_s0_rgb"):
+            label = label.with_name(f"{stem}{label.suffix}")
+        if not label.is_file() and image_path.parent.name.lower() == "images":
+            dataset_root = image_path.parent.parent.parent
+            split = image_path.parent.parent.name
+            candidates = (
+                dataset_root / "labels" / "rgb_aolp_dolp" / split / f"{stem}.txt",
+                dataset_root / "labels" / split / f"{stem}.txt",
+                image_path.parent.parent / "labels" / f"{stem}.txt",
+            )
+            label = next((candidate for candidate in candidates if candidate.is_file()), label)
     if not label.is_file():
         raise FileNotFoundError(f"Missing ground-truth label: {label}")
     height, width = image_shape[:2]
@@ -416,6 +428,9 @@ def main(args):
         raise FileNotFoundError(data_file)
     data = YAML.load(data_file)
     data["path"] = str(resolve_path(data.get("path", "."), data_file.parent))
+    configured_labels = data.get("labels_dir")
+    if args.labels_dir is None and configured_labels:
+        args.labels_dir = resolve_path(configured_labels, Path(data["path"]))
     for key, override in (("dolp_root", args.dolp_root), ("depth_root", args.depth_root)):
         value = override or data.get(key)
         if value:

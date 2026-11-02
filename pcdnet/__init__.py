@@ -51,7 +51,13 @@ def prepare_inputs(image_path, rgb, imgsz, aolp_root=None, dolp_root=None):
     if stem.lower().endswith("_s0_rgb"):
         stem = stem[:-len("_S0_rgb")]
     for root, suffix in ((aolp_root, "aolp"), (dolp_root, "dolp")):
-        path = (root if root is not None else image_path.parent) / f"{stem}_{suffix}_rgb.png"
+        modality_root = root if root is not None else image_path.parent
+        candidates = (
+            modality_root / f"{stem}_{suffix}_rgb.png",
+            modality_root / f"{stem}_{suffix}.tiff",
+            modality_root / f"{stem}_{suffix}.tif",
+        )
+        path = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
         image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
         if image is None:
             raise FileNotFoundError(f"Missing PCDNet scalar {suffix} input: {path}")

@@ -1,0 +1,7 @@
+# RGB-P Car PCDNet test inputs: RGB image plus paired AoLP and DoLP TIFFs.
+path: "/media/ddc/\u65b0\u52a0\u5377/hys/qmy/pz/RGB-P Car"
+val: test/images
+channels: 3
+labels_dir: labels/rgb_aolp_dolp/test
+names:
+  0: Car
