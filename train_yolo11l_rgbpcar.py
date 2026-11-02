@@ -17,7 +17,7 @@ def main() -> None:
     parser.add_argument("--batch", type=int, default=8)
     parser.add_argument("--device", default="0")
     parser.add_argument("--workers", type=int, default=2)
-    parser.add_argument("--lr0", type=float, default=1e-4)
+    parser.add_argument("--lr0", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--project", type=Path, default=ROOT / "runs/train")
     parser.add_argument("--name", default="yolo11l_rgbpcar_s0_scratch")
@@ -41,11 +41,12 @@ def main() -> None:
         name=args.name,
         pretrained=False,
         resume=False,
-        optimizer="AdamW",
+        optimizer="SGD",
         lr0=args.lr0,
-        lrf=0.01,
+        lrf=0.1,
         momentum=0.9,
         weight_decay=1e-4,
+        cos_lr=True,
         warmup_bias_lr=0.0,
         amp=False,
         deterministic=False,
