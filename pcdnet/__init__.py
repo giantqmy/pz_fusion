@@ -45,8 +45,8 @@ def load_model(weights, device):
 
 
 def prepare_inputs(image_path, rgb, imgsz, aolp_root=None, dolp_root=None):
-    """Match PZ_8 val: float32 resize, letterbox, /255, then repeat scalar polarization."""
-    gray_images = []
+    """Load three RGB domains expected by PCDNet, preserving color polarization TIFFs."""
+    polarization_images = []
     stem = image_path.stem
     if stem.lower().endswith("_s0_rgb"):
         stem = stem[:-len("_S0_rgb")]
@@ -58,13 +58,19 @@ def prepare_inputs(image_path, rgb, imgsz, aolp_root=None, dolp_root=None):
             modality_root / f"{stem}_{suffix}.tif",
         )
         path = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
-        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
         if image is None:
-            raise FileNotFoundError(f"Missing PCDNet scalar {suffix} input: {path}")
-        if image.shape != rgb.shape[:2]:
+            raise FileNotFoundError(f"Missing PCDNet {suffix} input: {path}")
+        if image.shape[:2] != rgb.shape[:2]:
             raise ValueError(f"PCDNet modality dimensions disagree: {path}")
-        gray_images.append(image[..., None])
-    image = np.concatenate((rgb, *gray_images), axis=-1).astype(np.float32)
+        if image.ndim == 2:
+            image = np.repeat(image[..., None], 3, axis=2)
+        elif image.ndim == 3 and image.shape[2] >= 3:
+            image = cv2.cvtColor(image[..., :3], cv2.COLOR_BGR2RGB)
+        else:
+            raise ValueError(f"Expected grayscale or color PCDNet {suffix} input, got {image.shape}: {path}")
+        polarization_images.append(image)
+    image = np.concatenate((rgb, *polarization_images), axis=-1).astype(np.float32)
     height, width = image.shape[:2]
     ratio = imgsz / max(height, width)
     resized_w, resized_h = min(math.ceil(width * ratio), imgsz), min(math.ceil(height * ratio), imgsz)
@@ -77,7 +83,7 @@ def prepare_inputs(image_path, rgb, imgsz, aolp_root=None, dolp_root=None):
     padded = np.full((imgsz, imgsz, image.shape[2]), 114, dtype=np.float32)
     padded[pad_y:pad_y + resized_h, pad_x:pad_x + resized_w] = image
     tensor = torch.from_numpy(np.ascontiguousarray(padded.transpose(2, 0, 1))).unsqueeze(0) / 255.0
-    inputs = [tensor[:, :3], tensor[:, 3:4].repeat(1, 3, 1, 1), tensor[:, 4:5].repeat(1, 3, 1, 1)]
+    inputs = [tensor[:, :3], tensor[:, 3:6], tensor[:, 6:9]]
     return inputs, (resized_w / width, resized_h / height, pad_x, pad_y)
 
 
