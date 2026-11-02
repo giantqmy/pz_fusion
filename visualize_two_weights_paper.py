@@ -125,7 +125,10 @@ def source_images(data, split, data_file):
                 images.append(path if path.is_absolute() else (location.parent / path).resolve())
         else:
             raise FileNotFoundError(f"Dataset split entry does not exist: {location}")
-    images = [p for p in images if p.suffix.lower() in IMAGE_SUFFIXES and not p.stem.lower().endswith(AUX_SUFFIXES)]
+    auxiliary_suffixes = tuple(suffix for suffix in AUX_SUFFIXES if suffix != "_s0_rgb")
+    images = [
+        p for p in images if p.suffix.lower() in IMAGE_SUFFIXES and not p.stem.lower().endswith(auxiliary_suffixes)
+    ]
     missing = next((p for p in images if not p.is_file()), None)
     if missing:
         raise FileNotFoundError(f"Missing dataset image: {missing}")
@@ -209,7 +212,7 @@ def load_models(args, device):
 
 def load_rgb(path):
     """Read the dataset's S0 RGB independently of any optional polarization/depth inputs."""
-    rgb_path = path.with_name(f"{path.stem}_S0_rgb.png")
+    rgb_path = path if path.stem.lower().endswith("_s0_rgb") else path.with_name(f"{path.stem}_S0_rgb.png")
     image = cv2.imread(str(rgb_path), cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(f"Missing S0 RGB input: {rgb_path}")
@@ -232,7 +235,12 @@ def infer(model, image, data, args, device):
 
 
 def label_boxes(image_path, image_shape, labels_dir):
-    label = labels_dir / f"{image_path.stem}.txt" if labels_dir else Path(img2label_paths([str(image_path)])[0])
+    stem = image_path.stem
+    if stem.lower().endswith("_s0_rgb"):
+        stem = stem[:-len("_S0_rgb")]
+    label = labels_dir / f"{stem}.txt" if labels_dir else Path(img2label_paths([str(image_path)])[0])
+    if not labels_dir and image_path.stem.lower().endswith("_s0_rgb"):
+        label = label.with_name(f"{stem}{label.suffix}")
     if not label.is_file():
         raise FileNotFoundError(f"Missing ground-truth label: {label}")
     height, width = image_shape[:2]

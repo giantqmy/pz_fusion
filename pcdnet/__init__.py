@@ -47,8 +47,11 @@ def load_model(weights, device):
 def prepare_inputs(image_path, rgb, imgsz, aolp_root=None, dolp_root=None):
     """Match PZ_8 val: float32 resize, letterbox, /255, then repeat scalar polarization."""
     gray_images = []
+    stem = image_path.stem
+    if stem.lower().endswith("_s0_rgb"):
+        stem = stem[:-len("_S0_rgb")]
     for root, suffix in ((aolp_root, "aolp"), (dolp_root, "dolp")):
-        path = (root if root is not None else image_path.parent) / f"{image_path.stem}_{suffix}_rgb.png"
+        path = (root if root is not None else image_path.parent) / f"{stem}_{suffix}_rgb.png"
         image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
         if image is None:
             raise FileNotFoundError(f"Missing PCDNet scalar {suffix} input: {path}")
