@@ -1,0 +1,7 @@
+# RGB-P Car S0 RGB-only dataset. Manifests list the actual *_S0_rgb.png files.
+path: "/media/ddc/\u65b0\u52a0\u5377/hys/qmy/pz/RGB-P Car"
+train: train_s0_rgb.txt
+val: test_s0_rgb.txt
+channels: 3
+names:
+  0: Car
