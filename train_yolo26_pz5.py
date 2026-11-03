@@ -41,8 +41,12 @@ class PZ5Trainer(DetectionTrainer):
 
 
 def main(args, trainer_cls=PZ5Trainer):
+    if args.weights and args.resume:
+        raise ValueError("Use --weights for a fresh fine-tuning run or --resume for checkpoint recovery, not both.")
     model = YOLO(str(args.resume or args.model))
-    model.train(
+    if args.weights:
+        model.load(str(args.weights))
+    train_args = dict(
         trainer=trainer_cls,
         data=str(args.data),
         imgsz=args.imgsz,
@@ -53,11 +57,18 @@ def main(args, trainer_cls=PZ5Trainer):
         rect=args.rect,
         project=str(args.project),
         name=args.name,
-        pretrained=False,
+        pretrained=bool(args.weights) if not args.resume else False,
         freeze=0,
         resume=str(args.resume) if args.resume else False,
         val=getattr(args, "val", True),
     )
+    if args.optimizer is not None:
+        train_args["optimizer"] = args.optimizer
+    if args.lr0 is not None:
+        train_args["lr0"] = args.lr0
+    if args.amp is not None:
+        train_args["amp"] = args.amp
+    model.train(**train_args)
 
 
 def get_parser():
@@ -73,7 +84,11 @@ def get_parser():
     parser.add_argument("--rect", action="store_true", help="Use rectangular batches during training.")
     parser.add_argument("--project", type=Path, default=ROOT / "runs/train")
     parser.add_argument("--name", default="yolo26_pz5")
+    parser.add_argument("--weights", type=Path, default=None, help="Initialize a fresh run from model weights.")
     parser.add_argument("--resume", type=Path, default=None, help="Path to an interrupted training last.pt checkpoint.")
+    parser.add_argument("--optimizer", default=None, help="Optional optimizer override, e.g. AdamW or SGD.")
+    parser.add_argument("--lr0", type=float, default=None, help="Optional initial learning rate override.")
+    parser.add_argument("--amp", action=argparse.BooleanOptionalAction, default=None, help="Override automatic mixed precision.")
     parser.add_argument("--val", action=argparse.BooleanOptionalAction, default=True, help="Run validation during training.")
     return parser
 
