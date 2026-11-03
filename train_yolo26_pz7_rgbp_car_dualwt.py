@@ -2,6 +2,7 @@
 
 from copy import copy
 from pathlib import Path
+import re
 
 import cv2
 import numpy as np
@@ -106,6 +107,8 @@ def resolve_dataset(requested: Path | None) -> Path:
 if __name__ == "__main__":
     parser = get_parser()
     parser.add_argument("--dataset", type=Path, default=None, help="RGB-P Car dataset root")
+    parser.add_argument("--scale", choices=("n", "s", "m", "l", "x"), default=None,
+                        help="Model scale override; also set scale in the generated YAML filename.")
     parser.set_defaults(
         model=ROOT / "ultralytics/cfg/models/26/yolo26l-pz7-pim-saffconcat-no-depth.yaml",
         workers=2,
@@ -120,13 +123,20 @@ if __name__ == "__main__":
     import yaml
 
     model_config = yaml.safe_load(args.model.read_text(encoding="utf-8"))
+    scale = args.scale or model_config.get("scale")
+    if scale is None:
+        match = re.search(r"yolo(?:e-)?(?:v)?\d+([nslmx])", args.model.stem)
+        scale = match.group(1) if match else None
+    if scale is None:
+        parser.error("Model scale is missing; set it in the YAML or pass --scale n|s|m|l|x.")
+    model_config["scale"] = scale
     model_config["nc"] = 1
     model_config["channels"] = 6
     model_config["ch"] = 6
     for layer in model_config["backbone"]:
         if layer[2] == "PZDualPIMStage":
             layer[2] = "PZDualWTStage"
-    dataset_model = ROOT / "runs/rgbp_car/yolo26l-pz7-rgbp-car-dualwt.yaml"
+    dataset_model = ROOT / f"runs/rgbp_car/yolo26{scale}-pz7-rgbp-car-dualwt.yaml"
     dataset_model.parent.mkdir(parents=True, exist_ok=True)
     dataset_model.write_text(yaml.safe_dump(model_config, sort_keys=False), encoding="utf-8")
     args.model = dataset_model
