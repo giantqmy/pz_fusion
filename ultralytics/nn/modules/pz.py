@@ -636,6 +636,28 @@ class _SparseSAFFConcat(_SparseSAFF):
         return fused, fused
 
 
+class _SparseSAFFCrossQuery(_SparseSAFF):
+    """Use cross-modal queries for both Top-k routing and attention over the target modality's K/V."""
+
+    def forward(self, rgb, dolp):
+        if rgb.shape != dolp.shape:
+            raise ValueError("Cross-query SAFF requires aligned RGB and DoLP features")
+        height, width = rgb.shape[-2:]
+        residual_rgb, residual_dolp = self.residual1(rgb), self.residual2(dolp)
+        padded_h = max(math.ceil(height / self.n_win), self.kv_ratio) * self.n_win
+        padded_w = max(math.ceil(width / self.n_win), self.kv_ratio) * self.n_win
+        pad = (0, padded_w - width, 0, padded_h - height)
+        rgb, dolp = F.pad(rgb, pad), F.pad(dolp, pad)
+        q_rgb, kv_rgb = self.qkv1(self._partition(rgb)).split((self.channels, 2 * self.channels), dim=-1)
+        q_dolp, kv_dolp = self.qkv2(self._partition(dolp)).split((self.channels, 2 * self.channels), dim=-1)
+        # Cross-modal queries drive routing before Top-k and then attend to aligned target K/V tokens.
+        rgb_update = self._attend(q_dolp, kv_rgb, kv_rgb[..., self.channels:])
+        dolp_update = self._attend(q_rgb, kv_dolp, kv_dolp[..., self.channels:])
+        rgb_update = self._restore(rgb_update, *rgb.shape[-2:])[..., :height, :width]
+        dolp_update = self._restore(dolp_update, *dolp.shape[-2:])[..., :height, :width]
+        return residual_rgb + rgb_update, residual_dolp + dolp_update
+
+
 class PZSAFFLateral(nn.Module):
     """Fuse a dual PIM state for the PAN lateral while leaving the backbone state separate.
 
@@ -671,6 +693,12 @@ class PZSAFFConcatLateral(PZSAFFLateral):
     """
 
     attention_type = _SparseSAFFConcat
+
+
+class PZSAFFCrossQueryLateral(PZSAFFLateral):
+    """Cross-route opposite-modality queries over each target modality's own K/V windows."""
+
+    attention_type = _SparseSAFFCrossQuery
 
 
 class PZSAFFConcatPreNormLateral(PZSAFFConcatLateral):

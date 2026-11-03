@@ -84,6 +84,7 @@ from ultralytics.nn.modules import (
     PZConvNeXtPIMStage,
     PZDualFAMStage,
     PZSAFFLateral,
+    PZSAFFCrossQueryLateral,
     PZSAFFConcatLateral,
     PZSAFFConcatPreNormLateral,
     PZDepthStage,
@@ -2151,7 +2152,7 @@ def parse_model(d, ch, verbose=True):
             c1, c2 = ch[f], args[0]
             c2 = make_divisible(min(c2, max_channels) * width, 8)
             args = [c1, c2, *args[1:]]
-        elif m in {PZSAFFLateral, PZSAFFConcatLateral}:
+        elif m in {PZSAFFLateral, PZSAFFCrossQueryLateral, PZSAFFConcatLateral}:
             c2 = ch[f]
             args = [c2, *args]
         elif m is PZSAFFConcatPreNormLateral:
