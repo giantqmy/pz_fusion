@@ -639,11 +639,14 @@ class _SparseSAFFConcat(_SparseSAFF):
 class _SparseSAFFCrossQuery(_SparseSAFF):
     """Use cross-modal queries for both Top-k routing and attention over the target modality's K/V."""
 
+    def _residuals(self, rgb, dolp):
+        return self.residual1(rgb), self.residual2(dolp)
+
     def forward(self, rgb, dolp):
         if rgb.shape != dolp.shape:
             raise ValueError("Cross-query SAFF requires aligned RGB and DoLP features")
         height, width = rgb.shape[-2:]
-        residual_rgb, residual_dolp = self.residual1(rgb), self.residual2(dolp)
+        residual_rgb, residual_dolp = self._residuals(rgb, dolp)
         padded_h = max(math.ceil(height / self.n_win), self.kv_ratio) * self.n_win
         padded_w = max(math.ceil(width / self.n_win), self.kv_ratio) * self.n_win
         pad = (0, padded_w - width, 0, padded_h - height)
@@ -656,6 +659,20 @@ class _SparseSAFFCrossQuery(_SparseSAFF):
         rgb_update = self._restore(rgb_update, *rgb.shape[-2:])[..., :height, :width]
         dolp_update = self._restore(dolp_update, *dolp.shape[-2:])[..., :height, :width]
         return residual_rgb + rgb_update, residual_dolp + dolp_update
+
+
+class _SparseSAFFCrossQueryScaledResidual(_SparseSAFFCrossQuery):
+    """Replace both 3x3 residual convolutions with modality-specific learnable scalars."""
+
+    def __init__(self, channels: int, topk: int, n_win: int, kv_ratio: int):
+        super().__init__(channels, topk, n_win, kv_ratio)
+        self.residual1 = nn.Identity()
+        self.residual2 = nn.Identity()
+        self.residual_scale_rgb = nn.Parameter(torch.tensor(1.0))
+        self.residual_scale_dolp = nn.Parameter(torch.tensor(1.0))
+
+    def _residuals(self, rgb, dolp):
+        return self.residual_scale_rgb * rgb, self.residual_scale_dolp * dolp
 
 
 class PZSAFFLateral(nn.Module):
@@ -699,6 +716,22 @@ class PZSAFFCrossQueryLateral(PZSAFFLateral):
     """Cross-route opposite-modality queries over each target modality's own K/V windows."""
 
     attention_type = _SparseSAFFCrossQuery
+
+
+class PZSAFFCrossQueryReducedLateral(PZSAFFLateral):
+    """Cross-query SAFF with separate pre-concat norms and a plain 2C-to-C projection."""
+
+    attention_type = _SparseSAFFCrossQueryScaledResidual
+
+    def __init__(self, channels: int, topk: int = 4, n_win: int = 8, kv_ratio: int = 4):
+        super().__init__(channels, topk, n_win, kv_ratio)
+        self.norm_rgb = _ChannelLayerNorm(channels // 2, eps=1e-6)
+        self.norm_dolp = _ChannelLayerNorm(channels // 2, eps=1e-6)
+        self.out_fuse = nn.Conv2d(channels, channels // 2, 1)
+
+    def forward(self, x):
+        rgb, dolp = self.saff(*x.chunk(2, dim=1))
+        return self.out_fuse(torch.cat((self.norm_rgb(rgb), self.norm_dolp(dolp)), dim=1))
 
 
 class PZSAFFConcatPreNormLateral(PZSAFFConcatLateral):
