@@ -14,7 +14,10 @@ from ultralytics.utils import colorstr
 from ultralytics.utils.torch_utils import unwrap_model
 
 ROOT = Path(__file__).resolve().parent
-DATASET_CANDIDATES = (Path(r"I:\KEDADATA\rgb-p-car\RGB-P Car"),)
+DATASET_CANDIDATES = (
+    Path("/media/ddc/新加卷/hys/qmy/pz/RGB-P Car"),
+    Path(r"I:\KEDADATA\rgb-p-car\RGB-P Car"),
+)
 IMAGE_SUFFIXES = {".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 
 

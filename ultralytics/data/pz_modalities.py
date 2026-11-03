@@ -43,6 +43,19 @@ def load_rgb_dolp(path: str | Path, dolp_root: str | Path | None = None, dolp_ch
     return _load_rgb_dolp(path, dolp_root=dolp_root, dolp_channels=dolp_channels)
 
 
+def load_rgb_dolp_tiff(path: str | Path) -> np.ndarray:
+    """Load an RGB TIFF and its sibling three-channel ``*_dolp.tiff`` as a six-channel image."""
+    rgb_path = Path(path)
+    dolp_path = rgb_path.parent.parent / "dolp" / f"{rgb_path.stem}_dolp.tiff"
+    rgb = cv2.imread(str(rgb_path), cv2.IMREAD_COLOR)
+    dolp = cv2.imread(str(dolp_path), cv2.IMREAD_COLOR)
+    if rgb is None or dolp is None:
+        raise FileNotFoundError(f"Missing RGB or original DoLP TIFF: {rgb_path}, {dolp_path}")
+    if rgb.shape[:2] != dolp.shape[:2]:
+        raise ValueError(f"RGB/DoLP image dimensions disagree: {rgb_path} {rgb.shape}, {dolp_path} {dolp.shape}")
+    return np.concatenate((cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB), cv2.cvtColor(dolp, cv2.COLOR_BGR2RGB)), axis=2)
+
+
 def load_rgb_aolp(path: str | Path, aolp_root: str | Path | None = None, aolp_channels: int = 1) -> np.ndarray:
     """Load aligned RGB and AoLP channels without a depth channel."""
     return _load_rgb_polarization(path, aolp_root, aolp_channels, "aolp")
