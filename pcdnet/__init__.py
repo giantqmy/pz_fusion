@@ -44,18 +44,21 @@ def load_model(weights, device):
     return model
 
 
-def prepare_inputs(image_path, rgb, imgsz, aolp_root=None, dolp_root=None):
-    """Load three RGB domains expected by PCDNet, preserving color polarization TIFFs."""
+def prepare_inputs(image_path, rgb, imgsz, aolp_root=None, dolp_root=None, tiff_only=False):
+    """Load three RGB domains expected by PCDNet, optionally requiring original TIFF inputs."""
     polarization_images = []
     stem = image_path.stem
     if stem.lower().endswith("_s0_rgb"):
         stem = stem[:-len("_S0_rgb")]
     for root, suffix in ((aolp_root, "aolp"), (dolp_root, "dolp")):
         modality_root = root if root is not None else image_path.parent
-        candidates = (
-            modality_root / f"{stem}_{suffix}_rgb.png",
+        tiff_candidates = (
             modality_root / f"{stem}_{suffix}.tiff",
             modality_root / f"{stem}_{suffix}.tif",
+        )
+        candidates = tiff_candidates if tiff_only else (
+            modality_root / f"{stem}_{suffix}_rgb.png",
+            *tiff_candidates,
         )
         path = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
         image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
@@ -88,11 +91,25 @@ def prepare_inputs(image_path, rgb, imgsz, aolp_root=None, dolp_root=None):
 
 
 @torch.inference_mode()
-def infer(model, image_path, rgb, imgsz, conf, iou, device, aolp_root=None, dolp_root=None, multi_label=False):
+def infer(
+    model,
+    image_path,
+    rgb,
+    imgsz,
+    conf,
+    iou,
+    device,
+    aolp_root=None,
+    dolp_root=None,
+    multi_label=False,
+    tiff_only=False,
+):
     """Decode PCDNet objectness/class scores and restore boxes to the original RGB image."""
     if imgsz % max(int(model.stride.max()), 32):
         raise ValueError("PCDNet imgsz must be a multiple of its maximum stride")
-    inputs, (gain_x, gain_y, pad_x, pad_y) = prepare_inputs(image_path, rgb, imgsz, aolp_root, dolp_root)
+    inputs, (gain_x, gain_y, pad_x, pad_y) = prepare_inputs(
+        image_path, rgb, imgsz, aolp_root, dolp_root, tiff_only=tiff_only
+    )
     predictions, _ = model([image.to(device) for image in inputs])
     detections = non_max_suppression(predictions, conf_thres=conf, iou_thres=iou, multi_label=multi_label)[0]
     detections = detections.detach().float().cpu().clone()

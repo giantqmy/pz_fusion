@@ -1,15 +1,18 @@
-"""Compare YOLO checkpoints on RGB-P Car using the original RGB/DoLP TIFF pairs.
+"""Compare YOLO and PCDNet checkpoints on RGB-P Car using original TIFF inputs.
 
 Expected layout::
 
-    DATASET_ROOT/{train,test}/{images,dolp,labels}/
+    DATASET_ROOT/{train,test}/{images,aolp,dolp,labels}/
     images/<stem>.tiff
+    aolp/<stem>_aolp.tiff
     dolp/<stem>_dolp.tiff
     labels/<stem>.txt
 
-Repeat ``--net NAME WEIGHTS`` to choose models and panel order. Three-channel
-models receive RGB; six-channel models receive RGB concatenated with the
-original three-channel DoLP TIFF. No pseudo-color DoLP files are read.
+Repeat ``--net NAME WEIGHTS`` to choose models and panel order. Use
+``--net pcdnet:NAME WEIGHTS`` for a migrated PCDNet checkpoint. Three-channel
+YOLO models receive RGB; six-channel YOLO models receive RGB concatenated with
+the original three-channel DoLP TIFF. PCDNet receives original RGB, AoLP and
+DoLP TIFFs. No pseudo-color polarization PNG is read.
 """
 
 import argparse
@@ -20,6 +23,8 @@ import cv2
 import numpy as np
 import torch
 
+from pcdnet import infer as infer_pcdnet
+from pcdnet import load_model as load_pcdnet
 from ultralytics import YOLO
 from ultralytics.data.augment import LetterBox
 from ultralytics.data.pz_modalities import normalize_modalities
@@ -41,6 +46,8 @@ def parse_args():
     parser.add_argument("--dataset", type=Path, required=True, help="RGB-P Car dataset root")
     parser.add_argument("--split", choices=("train", "test"), default="test")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--aolp-root", type=Path, help="Override the original AoLP TIFF directory")
+    parser.add_argument("--dolp-root", type=Path, help="Override the original DoLP TIFF directory")
     parser.add_argument("--device", default="0")
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.25)
@@ -54,11 +61,31 @@ def parse_args():
     return parser.parse_args()
 
 
-def get_images(dataset: Path, split: str, max_images: int):
+def resolve_original_tiff(root: Path, stem: str, modality: str):
+    candidates = (root / f"{stem}_{modality}.tiff", root / f"{stem}_{modality}.tif")
+    path = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if path is None:
+        raise FileNotFoundError(f"Missing original {modality.upper()} TIFF: {candidates[0]}")
+    return path
+
+
+def get_images(
+    dataset: Path,
+    split: str,
+    max_images: int,
+    require_dolp: bool,
+    require_aolp: bool,
+    dolp_dir: Path,
+    aolp_dir: Path,
+):
     image_dir = dataset / split / "images"
-    dolp_dir = dataset / split / "dolp"
     label_dir = dataset / split / "labels"
-    for directory in (image_dir, dolp_dir, label_dir):
+    required_dirs = [image_dir, label_dir]
+    if require_dolp:
+        required_dirs.append(dolp_dir)
+    if require_aolp:
+        required_dirs.append(aolp_dir)
+    for directory in required_dirs:
         if not directory.is_dir():
             raise FileNotFoundError(f"Expected RGB-P Car directory: {directory}")
     paths = sorted(
@@ -68,17 +95,18 @@ def get_images(dataset: Path, split: str, max_images: int):
     if not paths:
         raise ValueError(f"No RGB images found in {image_dir}")
     for path in paths:
-        dolp = dolp_dir / f"{path.stem}_dolp.tiff"
         label = label_dir / f"{path.stem}.txt"
-        if not dolp.is_file():
-            raise FileNotFoundError(f"Missing original DoLP TIFF paired with {path}: {dolp}")
         if not label.is_file():
             raise FileNotFoundError(f"Missing YOLO label for {path}: {label}")
+        if require_dolp:
+            resolve_original_tiff(dolp_dir, path.stem, "dolp")
+        if require_aolp:
+            resolve_original_tiff(aolp_dir, path.stem, "aolp")
     return paths[:max_images] if max_images > 0 else paths
 
 
 def load_pair(rgb_path: Path, dolp_dir: Path):
-    dolp_path = dolp_dir / f"{rgb_path.stem}_dolp.tiff"
+    dolp_path = resolve_original_tiff(dolp_dir, rgb_path.stem, "dolp")
     rgb_bgr = cv2.imread(str(rgb_path), cv2.IMREAD_COLOR)
     dolp_bgr = cv2.imread(str(dolp_path), cv2.IMREAD_COLOR)
     if rgb_bgr is None or dolp_bgr is None:
@@ -102,22 +130,38 @@ def model_channels(model):
 
 def load_models(specs, device):
     entries = []
-    reserved = {"ground_truth", "predictions.json"}
-    for name, weight_value in specs:
-        if not name.strip() or name.casefold() in reserved or Path(name).name != name:
+    used_names = {"ground_truth", "predictions.json"}
+    for raw_name, weight_value in specs:
+        kind = "pcdnet" if raw_name.lower().startswith("pcdnet:") else "yolo"
+        name = raw_name.split(":", 1)[1] if kind == "pcdnet" else raw_name
+        if not name.strip() or name.casefold() in used_names or Path(name).name != name:
             raise ValueError(f"Invalid model name for output directory: {name!r}")
+        used_names.add(name.casefold())
         weight = Path(weight_value).expanduser().resolve()
         if not weight.is_file():
             raise FileNotFoundError(weight)
-        model = YOLO(str(weight))
-        channels = model_channels(model)
-        model.model.to(device).eval()
+        model = load_pcdnet(weight, device) if kind == "pcdnet" else YOLO(str(weight))
+        channels = 9 if kind == "pcdnet" else model_channels(model)
+        if kind == "yolo":
+            model.model.to(device).eval()
         names = model.names
         names = dict(enumerate(names)) if isinstance(names, (list, tuple)) else {int(k): str(v) for k, v in names.items()}
-        entries.append({"name": name, "model": model, "channels": channels, "names": names, "weight": weight})
-        print(f"Model {name}: {channels}-channel input; {weight}")
+        entries.append({
+            "name": name,
+            "model": model,
+            "kind": kind,
+            "channels": channels,
+            "names": names,
+            "weight": weight,
+        })
+        input_description = "RGB + original AoLP/DoLP TIFF" if kind == "pcdnet" else f"{channels}-channel"
+        print(f"Model {name}: {kind}, {input_description} input; {weight}")
     baseline_names = entries[0]["names"]
-    if any(entry["names"] != baseline_names for entry in entries[1:]):
+    if any(
+        entry["names"].keys() != baseline_names.keys()
+        or any(entry["names"][class_id].casefold() != baseline_names[class_id].casefold() for class_id in baseline_names)
+        for entry in entries[1:]
+    ):
         raise ValueError("All checkpoints must use the same class IDs and names for a comparison panel.")
     return entries
 
@@ -168,19 +212,40 @@ def main(args):
     dataset = args.dataset.expanduser().resolve()
     if not dataset.is_dir():
         raise FileNotFoundError(dataset)
-    images = get_images(dataset, args.split, args.max_images)
     output = args.output.expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     device = select_device(args.device)
     entries = load_models(args.net, device)
     names = entries[0]["names"]
-    dolp_dir = dataset / args.split / "dolp"
+    dolp_dir = (args.dolp_root or dataset / args.split / "dolp").expanduser().resolve()
+    aolp_dir = (args.aolp_root or dataset / args.split / "aolp").expanduser().resolve()
+    require_dolp = any(entry["channels"] == 6 or entry["kind"] == "pcdnet" for entry in entries)
+    require_aolp = any(entry["kind"] == "pcdnet" for entry in entries)
+    images = get_images(
+        dataset,
+        args.split,
+        args.max_images,
+        require_dolp,
+        require_aolp,
+        dolp_dir,
+        aolp_dir,
+    )
     print("Panel order: ground truth | " + " | ".join(entry["name"] for entry in entries))
-    print("DoLP source: original three-channel TIFF files in " + str(dolp_dir))
+    if require_dolp:
+        print("DoLP source: original TIFF files in " + str(dolp_dir))
+    if require_aolp:
+        print("AoLP source: original TIFF files in " + str(aolp_dir))
 
     records = []
     for index, rgb_path in enumerate(images, 1):
-        rgb_bgr, rgb, rgb_dolp = load_pair(rgb_path, dolp_dir)
+        if require_dolp:
+            rgb_bgr, rgb, rgb_dolp = load_pair(rgb_path, dolp_dir)
+        else:
+            rgb_bgr = cv2.imread(str(rgb_path), cv2.IMREAD_COLOR)
+            if rgb_bgr is None:
+                raise OSError(f"Could not decode RGB TIFF: {rgb_path}")
+            rgb = cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB)
+            rgb_dolp = None
         label_path = dataset / args.split / "labels" / f"{rgb_path.stem}.txt"
         truth = read_labels(label_path, rgb_bgr.shape)
         truth_boxes = torch.tensor(
@@ -193,13 +258,32 @@ def main(args):
         record = {
             "image": str(rgb_path),
             "rgb_tiff": str(rgb_path),
-            "dolp_tiff": str(dolp_dir / f"{rgb_path.stem}_dolp.tiff"),
             "ground_truth": [{"class_id": cid, "xyxy": list(box)} for cid, box in truth],
         }
+        if require_dolp:
+            record["dolp_tiff"] = str(resolve_original_tiff(dolp_dir, rgb_path.stem, "dolp"))
+        if require_aolp:
+            record["aolp_tiff"] = str(resolve_original_tiff(aolp_dir, rgb_path.stem, "aolp"))
         for entry in entries:
-            model_input = rgb if entry["channels"] == 3 else rgb_dolp
-            detections = infer(entry["model"], model_input, entry["channels"],
-                               args.imgsz, args.conf, args.iou, device)
+            if entry["kind"] == "pcdnet":
+                detections = infer_pcdnet(
+                    entry["model"],
+                    rgb_path,
+                    rgb,
+                    args.imgsz,
+                    args.conf,
+                    args.iou,
+                    device,
+                    aolp_dir,
+                    dolp_dir,
+                    tiff_only=True,
+                )
+            else:
+                model_input = rgb if entry["channels"] == 3 else rgb_dolp
+                detections = infer(
+                    entry["model"], model_input, entry["channels"],
+                    args.imgsz, args.conf, args.iou, device
+                )
             canvas = draw(rgb_bgr, detections, names, args.box_width, show_conf=True)
             save_image(output / entry["name"] / file_name, canvas)
             if args.save_comparison:
