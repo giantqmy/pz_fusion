@@ -2,6 +2,13 @@
 
 from train_yolo26_pz5 import ROOT, get_parser, main
 from train_yolo26_pz5_pim_saffconcat_hmoe_joint import PZ5PIMSAFFConcatHMoETrainer
+from ultralytics.nn.modules.pz import PZDualWTStage
+
+
+class PZ7PIMSAFFConcatHMoETrainer(PZ5PIMSAFFConcatHMoETrainer):
+    """Require the PZ7 dual-wavelet visual stages used by this model YAML."""
+
+    stage_type = PZDualWTStage
 
 
 if __name__ == "__main__":
@@ -15,4 +22,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.model.suffix.lower() not in {".yaml", ".yml"}:
         parser.error("--model must be a YAML configuration for training from scratch")
-    main(args, trainer_cls=PZ5PIMSAFFConcatHMoETrainer)
+    main(args, trainer_cls=PZ7PIMSAFFConcatHMoETrainer)
