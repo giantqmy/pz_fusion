@@ -60,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch", type=int, default=8)
     parser.add_argument("--device", default="0")
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--save-period", type=int, default=20, help="Save an epoch checkpoint every N epochs")
     parser.add_argument("--optimizer", default="SGD")
     parser.add_argument("--lr0", type=float, default=0.01)
     parser.add_argument("--lrf", type=float, default=0.1, help="Final LR factor; 0.1 makes 0.01 decay to 0.001")
@@ -109,6 +110,7 @@ def main(args: argparse.Namespace) -> None:
         patience=0,
         val=True,
         save=True,
+        save_period=args.save_period,
         plots=True,
         cache=False,
     )
