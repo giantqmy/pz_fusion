@@ -1,5 +1,7 @@
 """Paired PZ detection input: RGB, AoLP/DoLP, and raw uint16 depth."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import cv2
@@ -54,6 +56,27 @@ def load_rgb_dolp_tiff(path: str | Path) -> np.ndarray:
     if rgb.shape[:2] != dolp.shape[:2]:
         raise ValueError(f"RGB/DoLP image dimensions disagree: {rgb_path} {rgb.shape}, {dolp_path} {dolp.shape}")
     return np.concatenate((cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB), cv2.cvtColor(dolp, cv2.COLOR_BGR2RGB)), axis=2)
+
+
+def load_rgb_aolp_dolp_tiff(path: str | Path) -> np.ndarray:
+    """Load aligned RGB, AoLP and DoLP RGB-P Car TIFFs as a nine-channel image."""
+    rgb_path = Path(path)
+    split_root = rgb_path.parent.parent
+    aolp_path = split_root / "aolp" / f"{rgb_path.stem}_aolp.tiff"
+    dolp_path = split_root / "dolp" / f"{rgb_path.stem}_dolp.tiff"
+    rgb = cv2.imread(str(rgb_path), cv2.IMREAD_COLOR)
+    aolp = cv2.imread(str(aolp_path), cv2.IMREAD_COLOR)
+    dolp = cv2.imread(str(dolp_path), cv2.IMREAD_COLOR)
+    if rgb is None or aolp is None or dolp is None:
+        raise FileNotFoundError(f"Missing RGB-P Car TIFF triplet: {rgb_path}, {aolp_path}, {dolp_path}")
+    if rgb.shape[:2] != aolp.shape[:2] or rgb.shape[:2] != dolp.shape[:2]:
+        raise ValueError(
+            f"RGB/AoLP/DoLP TIFF dimensions disagree: {rgb_path} {rgb.shape}, "
+            f"{aolp_path} {aolp.shape}, {dolp_path} {dolp.shape}"
+        )
+    return np.concatenate(
+        tuple(cv2.cvtColor(image, cv2.COLOR_BGR2RGB) for image in (rgb, aolp, dolp)), axis=2
+    )
 
 
 def load_rgb_aolp(path: str | Path, aolp_root: str | Path | None = None, aolp_channels: int = 1) -> np.ndarray:

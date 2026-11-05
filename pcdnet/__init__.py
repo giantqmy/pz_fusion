@@ -25,12 +25,20 @@ class _Unpickler(pickle.Unpickler):
         return super().find_class(module, name)
 
 
-def load_model(weights, device):
-    """Restore the full trained model, retaining every checkpoint parameter."""
+def load_checkpoint(weights, device="cpu"):
+    """Load a legacy full-object PCDNet checkpoint with isolated module names."""
     legacy_pickle = types.ModuleType("pcdnet_pickle")
     legacy_pickle.Unpickler = _Unpickler
     legacy_pickle.load = pickle.load
-    checkpoint = torch.load(weights, map_location="cpu", pickle_module=legacy_pickle, weights_only=False)
+    try:
+        return torch.load(weights, map_location=device, pickle_module=legacy_pickle, weights_only=False)
+    except TypeError:  # PyTorch versions without the weights_only argument.
+        return torch.load(weights, map_location=device, pickle_module=legacy_pickle)
+
+
+def load_model(weights, device):
+    """Restore the full trained model, retaining every checkpoint parameter."""
+    checkpoint = load_checkpoint(weights)
     if not isinstance(checkpoint, dict):
         raise TypeError("Expected a PCDNet checkpoint dictionary containing model or ema")
     model = next((checkpoint.get(key) for key in ("ema", "model")

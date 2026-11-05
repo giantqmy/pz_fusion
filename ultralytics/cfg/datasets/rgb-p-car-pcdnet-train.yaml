@@ -1,0 +1,10 @@
+# Original RGB-P Car TIFF triplets for PCDNet training.
+path: "/media/ddc/\u65b0\u52a0\u5377/hys/qmy/pz/RGB-P Car"
+train: train/images
+val: test/images
+test: test/images
+channels: 9
+ch: 9
+rgb_aolp_dolp_tiff: true
+names:
+  0: Car
