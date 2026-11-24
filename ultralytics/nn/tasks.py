@@ -60,6 +60,9 @@ from ultralytics.nn.modules import (
     LRPCHead,
     Pose,
     Pose26,
+    PZDepthFusion,
+    PZDepthStage,
+    PZPIMStage,
     RepC3,
     RepConv,
     RepNCSPELAN4,
@@ -76,9 +79,6 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
-    PZPIMStage,
-    PZDepthStage,
-    PZDepthFusion,
 )
 from ultralytics.utils import (
     DEFAULT_CFG_DICT,

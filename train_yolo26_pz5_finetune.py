@@ -55,7 +55,9 @@ class PZ5FinetuneTrainer(PZ5Trainer):
         if model.end2end != weights.end2end:
             raise ValueError("PZ4 and PZ5 must use the same end-to-end Detect configuration")
 
-        mapping = list(zip(range(5), VISUAL_LAYERS)) + list(zip(range(5, len(weights.model)), range(15, len(model.model))))
+        mapping = list(zip(range(5), VISUAL_LAYERS)) + list(
+            zip(range(5, len(weights.model)), range(15, len(model.model)))
+        )
         source = weights.float()
         # Validate every layer before copying: silent partial loading would invalidate the experiment.
         for old, new in mapping:
